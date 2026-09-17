@@ -38,6 +38,11 @@ TARGET_SUFFIX = {".html", ".css", ".xml", ".md", ".py", ".yml"}
 SELF = {"check_copy.py"}
 
 
+def _under(rel, paths):
+    """rel が paths のどれかそのもの、またはその下にあるか。"""
+    return any(rel == q or rel.startswith(q + "/") for q in paths)
+
+
 def not_published():
     """公開しないと決めたものは見ない。**手で書かず、除外リストから取る。**
 
@@ -51,8 +56,11 @@ def not_published():
     try:
         import make_public_tree
     except ImportError:
-        return set()
-    return {path for path, _ in make_public_tree.EXCLUDE}
+        return ()
+    # ディレクトリを外したら、その中身も外す。**完全一致にしない。**
+    # 完全一致だと ".claude" は外れても ".claude/skills/..." が残り、
+    # 「検査する範囲＝公開する範囲」が崩れる。
+    return tuple(path for path, _ in make_public_tree.EXCLUDE)
 
 
 def scan(path):
@@ -78,7 +86,7 @@ def main():
         and not (set(p.relative_to(config.ROOT).parts) & skip)
         and p.name not in SELF
         and "data/raw" not in p.relative_to(config.ROOT).as_posix()
-        and p.relative_to(config.ROOT).as_posix() not in skip_paths
+        and not _under(p.relative_to(config.ROOT).as_posix(), skip_paths)
     )
     total = 0
     for path in files:

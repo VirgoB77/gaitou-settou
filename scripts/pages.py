@@ -280,6 +280,21 @@ def main():
                + "</urlset>\n")
     (SRC / "sitemap.xml").write_text(sitemap, encoding="utf-8")
 
+    # robots.txt も config から作る。固定文字列で書くと SITE_URL と離れて古びる
+    # （User-Agent と同じ理屈）。姉妹サイトと同じ形。
+    #
+    # 止めるのは、ページではないもの。公開する木にはデータとスクリプトが入るが、
+    # 中身に問題があるからではなく、検索結果に出ても誰の役にも立たないため。
+    # docs/ は止めない。突合率は人が読む記録で、policy から辿れるようにしてある。
+    robots = ("User-agent: *\n"
+              "Disallow: /data/\n"
+              "Disallow: /scripts/\n"
+              "Disallow: /tests/\n"
+              "Disallow: /common/\n"
+              "Disallow: /.github/\n"
+              f"Sitemap: {SITE}/sitemap.xml\n")
+    (SRC / "robots.txt").write_text(robots, encoding="utf-8")
+
     print(f"合計 {len(all_pages)} ページ ＋ 一覧 ＋ sitemap.xml")
 
 

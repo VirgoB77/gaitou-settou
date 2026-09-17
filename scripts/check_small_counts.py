@@ -140,7 +140,7 @@ def group_margin(fcs, idx):
     戻り値は (まとまりの一覧, 危ないまとまりの一覧)。
     読者にできる計算しかしていない（S も k も公開している数字から出る）。
     """
-    rows, bad = [], []
+    rows, bad, thin = [], [], []
     city = {}
     for m in idx["counts_by_city"]:
         city[(m["city_code"], m["kind"].split("/", 1)[1], m["period"])] = m["count"]
@@ -169,16 +169,26 @@ def group_margin(fcs, idx):
                         if f["properties"]["n"][i] is not None)
             m_ = (S - shown) - k          # 伏せた升のうち2件のものの数
             margin = min(m_, k - m_)
-            row = (P["city"], layer["name"], S, k, m_, f"余裕 {margin}")
+            note = f"余裕 {margin}"
+            # 余裕が0かどうかだけ見ると、崖の縁に立つまで鳴らない。
+            # 余裕が k に対して細ってくると、1升ずつの「2件らしさ」が
+            # 0か1に寄る。升が確定しなくても、当てやすさは上がる。
+            # **崩れてから鳴るのでは遅い。** 細ったら先に言う。
+            if k >= 2 and 0 < m_ < k and margin < k * THIN:
+                note += f"（細い／k の {margin / k:.0%}）"
+                thin.append((P["city"], layer["name"], k, m_, margin))
+            row = (P["city"], layer["name"], S, k, m_, note)
             rows.append(row)
             if k < 2 or m_ <= 0 or m_ >= k:
                 bad.append(row)
-    return rows, bad
+    return rows, bad, thin
 
 
 # ---------------------------------------------------------------- 引き算
 
 # 引き算の経路。どの関係で升が確定したかを、この名前で数える。
+THIN = 0.25   # 余裕が k のこれを下回ったら「細い」と言う
+
 ROUTE = {
     "市": "市の升の和 − 町丁目の層の升の和",
     "時間帯": "市の時間帯の和 − 市の手口の升の和",
@@ -416,7 +426,7 @@ def main():
     print("■ まとまりの余裕（市の升を足すと町丁目の層の親になる）")
     print("   伏せた升 k 個のうち2件が m 個。m は公開している数字から確定する。")
     print("   m が 0 か k に張り付くと、k 升すべてが特定できる。")
-    rows, bad = group_margin(fcs, idx)
+    rows, bad, thin = group_margin(fcs, idx)
     ng += len(bad)
     print(f"   {'市':<8}{'層':<12}{'親 S':>8}{'伏せた k':>9}{'2件 m':>7}  余裕")
     for city, name, S, k, m_, note in rows:
@@ -424,6 +434,11 @@ def main():
               f"{('—' if m_ is None else m_):>7}  {note}")
     if bad:
         print("   ★ 余裕が0のまとまりがある。補完的伏せが要る（共通仕様3.2）。")
+    if thin:
+        print(f"   ▲ 余裕が細いまとまりが {len(thin)} 件ある（k の {THIN:.0%} 未満）。")
+        print("      まだ崩れていないが、市や年を足すと崩れる側にある。")
+        for city, name, k, m_, margin in thin:
+            print(f"      {city} {name}  k={k}  余裕={margin}")
 
     print()
     print("■ 引き算で戻る升")

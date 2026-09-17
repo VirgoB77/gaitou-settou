@@ -174,5 +174,40 @@ class TestTextMatchesData(unittest.TestCase):
                          "市の升に抜けがある")
 
 
+class TestGrainMismatch(unittest.TestCase):
+    """**町丁目と市で、粒度をわざとずらしておく。**
+
+    町丁目の個票は8年合計だけ。市の升は年ごと。
+    だから市の升を年で引いても、相手になる「町丁目 × 年」が存在しない。
+    引けるのは8年合計どうしだけになる。
+
+    2026-09-17：姉妹セッションが「意図した設計ではないかもしれないが
+    実際に効いている。直すときに壊さないでほしい」と指摘してきた。
+    効いているなら、意図に格上げして検査で留める。
+    偶然効いているものは、次の変更で黙って消える。
+    """
+
+    def setUp(self):
+        self.d = load()
+
+    def test_town_records_have_one_period_only(self):
+        """町丁目の個票の期間は1種類だけ。年を足したら、ここが落ちる。"""
+        periods = {r["period"] for r in self.d["records"]}
+        self.assertEqual(len(periods), 1,
+                         f"町丁目に複数の期間が出ている: {sorted(periods)}")
+
+    def test_town_period_is_the_whole_window(self):
+        """その1種類が、窓ぜんぶ（年ごとではない）であること。"""
+        period = next(iter({r["period"] for r in self.d["records"]}))
+        self.assertIn("-", period, f"町丁目の期間が単年になっている: {period}")
+
+    def test_city_grain_is_finer_than_town(self):
+        """市の升のほうが細かいこと。同じ粒度になると直接引ける。"""
+        town = {r["period"] for r in self.d["records"]}
+        city = {m["period"] for m in self.d["counts_by_city"]}
+        self.assertFalse(town & city,
+                         "町丁目と市が同じ粒度の升を持っている。引き算の相手になる")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

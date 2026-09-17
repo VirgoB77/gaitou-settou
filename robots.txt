@@ -1,0 +1,7 @@
+User-agent: *
+Disallow: /data/
+Disallow: /scripts/
+Disallow: /tests/
+Disallow: /common/
+Disallow: /.github/
+Sitemap: https://gaitou-settou.com/sitemap.xml
