@@ -136,5 +136,43 @@ class TestNoRawValuesAnywhere(unittest.TestCase):
         self.assertEqual(leak.bar_widths(), 0)
 
 
+class TestTextMatchesData(unittest.TestCase):
+    """**文面が約束していることを、データが満たしているか。**
+
+    注記とポリシーは「自動販売機ねらい・ひったくりは町丁目には出さず、
+    市ごと・年ごとの件数を出している」と書いている。
+    書いてあるのに無い、は共通仕様3.5に反する（伏せ方の問題ではなく、
+    嘘になるという問題）。逆に、町丁目に出ていたら伏せ方の問題になる。
+
+    2026-09-17：姉妹セッションの検証が「書いてあるが実物に無い」と報告してきた。
+    実際には index.json にあったが、**画面には1件も出ていなかった**ので
+    文面のほうを正確にした。ここはデータ側の裏づけを見張る。
+    """
+
+    def setUp(self):
+        self.d = load()
+
+    def test_city_only_teguchi_are_in_counts(self):
+        """町丁目に出していない手口が、市の升には出ていること。"""
+        kinds = {m["kind"].split("/", 1)[1] for m in self.d["counts_by_city"]}
+        for t in config.CITY_ONLY:
+            self.assertIn(t, kinds,
+                          f"{t} を市の升に出していない。注記が約束している")
+
+    def test_city_only_teguchi_are_not_in_town_records(self):
+        """逆に、町丁目の個票には出ていないこと（束ねたら細かいほうは出さない）。"""
+        layer_names = {l["name"] for l in config.TOWN_LAYERS}
+        for r in self.d["records"]:
+            self.assertIn(r["kind"].split("/", 1)[1], layer_names, r["kind"])
+
+    def test_city_masu_cover_every_year(self):
+        """市の升は手口 × 年をすべて埋めていること。欠けると和が変わる。"""
+        years = {m["period"] for m in self.d["counts_by_city"]}
+        cities = {m["city_code"] for m in self.d["counts_by_city"]}
+        want = len(years) * len(cities) * len(config.TEGUCHI)
+        self.assertEqual(len(self.d["counts_by_city"]), want,
+                         "市の升に抜けがある")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
