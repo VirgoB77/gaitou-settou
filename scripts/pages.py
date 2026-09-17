@@ -89,15 +89,24 @@ def notes(updated, up="../", any_withheld=False):
 <a href="{config.SPEC_URL}">姉妹サイト共通仕様</a></p>"""
 
 
-def page(title, desc, body, depth=1):
+def page(title, desc, body, depth=1, canon=""):
+    """canon … このページの正しいURL（SITE からの相対）。
+
+    同じ中身が2つのURLで出る。`/cho/` と `/cho/index.html`、`/` と `/index.html`。
+    canonical が無いと、検索側がどちらを正とするかを自分で決める。
+    **SITE_URL から作る**ので、公開先が変わればひとりでに追従する
+    （User-Agent・robots.txt と同じ理屈）。
+    """
     up = "../" * depth
+    canonical = (f'\n<link rel="canonical" href="{SITE}{canon}">'
+                 f'\n<meta property="og:url" content="{SITE}{canon}">') if canon else ""
     return f"""<!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)}</title>
-<meta name="description" content="{html.escape(desc)}">
+<meta name="description" content="{html.escape(desc)}">{canonical}
 <link rel="stylesheet" href="{up}style.css">
 </head>
 <body>
@@ -231,7 +240,8 @@ def build_city(fc, updated):
         desc = (f'{city}{p["name"]}の{period}の窃盗認知件数（表示している手口の合計）は'
                 f'{n}{unit}です。層ごとの件数と人口千人あたりの件数、隣り合う町丁目も'
                 f'掲載しています。出典は兵庫県警察と国勢調査。')
-        (OUT / f'{p["code"]}.html').write_text(page(title, desc, body), encoding="utf-8")
+        (OUT / f'{p["code"]}.html').write_text(
+            page(title, desc, body, canon=f'/cho/{p["code"]}.html'), encoding="utf-8")
         written.append((p["code"], p["name"]))
 
     return written
@@ -270,7 +280,7 @@ def main():
     (OUT / "index.html").write_text(
         page(f"町丁目の一覧｜{config.SITE_NAME}",
              "掲載している町丁目の一覧です。市ごとに、町丁目ごとのページへ移動できます。",
-             body), encoding="utf-8")
+             body, canon="/cho/"), encoding="utf-8")
 
     urls = [f"{SITE}/", f"{SITE}/policy.html", f"{SITE}/cho/"]
     urls += [f"{SITE}/cho/{code}.html" for code in all_pages]
