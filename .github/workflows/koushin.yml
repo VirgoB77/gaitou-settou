@@ -1,0 +1,180 @@
+name: 犯罪オープンデータを取り込む
+
+# 手で押して動かす。あわせて月1回、新しい年のデータが出ていないか見に行く。
+# 兵庫県警は年1回しか出さないので、頻度はこれで足りる（共通仕様3.4）。
+on:
+  workflow_dispatch:
+  schedule:
+    # 毎月2日 日本時間 朝7時（UTCの1日22時）。
+    # GitHub Actions の cron は L（月末）を解釈しないので日付で書く。
+    - cron: "0 22 1 * *"
+
+concurrency:
+  group: koushin
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  koushin:
+    runs-on: ubuntu-latest
+    env:
+      # 金庫（生データの置き場・private）の鍵があるか。
+      HAS_VAULT: ${{ secrets.RAW_DEPLOY_KEY != '' }}
+      # 金庫の名前は公開用の名前から決める（<公開用>-raw）。
+      # 見張りと checkout が同じ名前を見るので、fork や仮の名前では存在せず止まる。
+      RAW_REPO: ${{ github.repository }}-raw
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # 共通仕様9節「2本のリポジトリ」。生データ（県警CSV・e-Statの境界）は private の金庫に置き、
+      # ここには伏せ処理を通した結果とページだけを残す。
+      #
+      # このサイトは**生データの中身ではなく履歴のために**2本にしている（9節・2026-09-17）。
+      # 元は警察のオープンデータなので生データ自体は公開してよいが、伏せ方を直す前の
+      # 古い出力が履歴に残っていて、伏せたはずの実数がそこから読める。
+      # だから公開用は履歴ゼロで作り、ここ（金庫）は private のままにする。
+      - name: 置き場を確かめる
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          case "$GITHUB_REPOSITORY" in
+            *-raw|*-raw-*) echo "ここは金庫（$GITHUB_REPOSITORY）。金庫では走らない"; exit 1 ;;
+          esac
+          raw_tracked=$(git ls-files -- data/raw)
+          if [ "$HAS_VAULT" = "true" ]; then
+            if [ -n "$raw_tracked" ]; then
+              echo "鍵があるのに、このリポジトリ自身が生データを追跡している。二重になるので止まる"
+              exit 1
+            fi
+            # 金庫が private であることを確かめる。公開側の GITHUB_TOKEN から見えるなら（200）public。
+            # private なら 404。それ以外（通信失敗・403）も止まる（疑わしきは止まる）。
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+                     -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+                     "https://api.github.com/repos/${RAW_REPO}" || true)
+            case "$code" in
+              404) echo "金庫 ${RAW_REPO} は公開側から見えない（private か、まだ無い）" ;;
+              200) echo "金庫 ${RAW_REPO} が public のまま。生データを送らない。先に private にする"; exit 1 ;;
+              *)   echo "金庫の見え方を確かめられなかった（HTTP ${code:-なし}）。止まる"; exit 1 ;;
+            esac
+            echo "金庫の形で動く"
+          else
+            echo "鍵が無い。生データを取りに行くと public に載るので、取りに行かずに止まる。"
+            echo "Secret RAW_DEPLOY_KEY を入れる（docs/公開用リポジトリの作り方.md）"
+            exit 1
+          fi
+
+      - name: 金庫を隣に出す
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.RAW_REPO }}
+          ref: main
+          ssh-key: ${{ secrets.RAW_DEPLOY_KEY }}
+          path: _raw
+
+      - name: 生データの置き場を金庫につなぐ
+        run: |
+          mkdir -p data _raw/data/raw
+          rm -rf data/raw
+          ln -s ../_raw/data/raw data/raw
+          ls -la data
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 共通仕様9節の例外。地図の形を扱うところだけ外部ライブラリを使う（README に理由）。
+      - name: 要るものを入れる
+        run: python -m pip install --quiet pyshp shapely
+
+      # 共通仕様9節「ワークフローの最初のステップでテストを走らせる」。
+      # 落ちたらここで止まり、取りに行かない。伏せ忘れがあると取りに行く前に止まる。
+      - name: 検査する（昨日の出力に対して）
+        run: |
+          python -m unittest discover -s tests
+          python scripts/check_small_counts.py
+          python scripts/check_copy.py
+
+      - name: 取ってくる
+        run: python scripts/fetch_data.py
+
+      - name: 作る
+        run: |
+          python scripts/build.py
+          python scripts/pages.py
+
+      # 取り直せないものを先にしまう。金庫は private なので、公開側の検査を待たない。
+      - name: 生データを金庫にしまう
+        if: ${{ !cancelled() }}
+        working-directory: _raw
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p data/reports
+          cp -f ../data/parse-unknown.md data/reports/ 2>/dev/null || true
+          cp -f ../data/build/unmatched.csv data/reports/ 2>/dev/null || true
+          cp -f ../data/build/suppress-report.md data/reports/ 2>/dev/null || true
+          git add data
+          if git diff --cached --quiet; then
+            echo "生データに変わりなし"
+          else
+            git commit -m "生データを $(date -u +%Y-%m-%d) の時点でためた"
+            for i in 1 2 3 4 5; do
+              git push origin HEAD:main && exit 0
+              git pull --rebase --autostash -X theirs origin main || { git rebase --abort 2>/dev/null || true; exit 1; }
+              sleep $((i * 3))
+            done
+            echo "5回試したが金庫に送れなかった"; exit 1
+          fi
+
+      # 最初の検査は昨日の出力に対してなので、今日の出力の伏せ忘れは止められない。
+      # ここで止める（止まっても生データはもう金庫にある）。
+      - name: もう一度検査する（作ったものに対して）
+        run: |
+          python -m unittest discover -s tests
+          python scripts/check_small_counts.py
+          python scripts/check_copy.py
+
+      - name: 結果をしまう
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 公開してよいと決めたものだけを列挙して入れる（許可リスト）。
+          # data をまるごと add しない。新しい出力を公開したいときは、ここに1つ足す。
+          # 足し忘れると「載らない」だけで済む。逆は済まない。
+          #
+          # 入れないもの：
+          #   data/build/unmatched.csv       … 突合できなかった行の個票。割合は docs/突合率.md に出す
+          #   data/build/suppress-report.md  … なぜ伏せたかの記録。理由は公開側に書かない（6節）
+          #   data/parse-unknown.md          … 走らせた記録。金庫の data/reports に写す
+          for p in index.html policy.html style.css sitemap.xml .nojekyll index.json \
+                   cho data/build docs/突合率.md; do
+            if [ -e "$p" ] || [ -n "$(git ls-files -- "$p")" ]; then git add -A -- "$p"; fi
+          done
+          # data/build は市を足すたびに増えるので丸ごと入れるが、個票だけは外す。
+          # 市コードを直書きすると、市を足したときに足し忘れる。
+          git reset -q -- data/build/unmatched.csv data/build/suppress-report.md 2>/dev/null || true
+          # 見張り：許可リストをいじっても、生データ・記録・symlink が混ざったら止まる
+          if git diff --cached --name-only -z | tr '\0' '\n' \
+               | grep -E '^(data/raw/|data/build/(unmatched\.csv|suppress-report\.md)$|data/[^/]+\.md$|_raw/)'; then
+            echo "公開側の commit に生データか記録が混ざった。止まる"
+            exit 1
+          fi
+          if git -c core.quotePath=false diff --cached --raw | awk '$2 == "120000"' | grep -q .; then
+            echo "公開側の commit に symlink が混ざった。止まる"
+            exit 1
+          fi
+          if git diff --cached --quiet; then
+            echo "変わりなし。今回は何も起きていない"
+            exit 0
+          fi
+          git commit -m "犯罪オープンデータを $(date -u +%Y-%m-%d) の時点で取り込んだ"
+          for i in 1 2 3 4 5; do
+            git push && exit 0
+            git pull --rebase --autostash -X theirs origin main || { git rebase --abort 2>/dev/null || true; exit 1; }
+            sleep $((i * 3))
+          done
+          echo "5回試したが送れなかった"; exit 1

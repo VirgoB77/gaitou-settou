@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
+<title>街頭窃盗統計</title>
+<meta name="description" content="兵庫県（尼崎市・西宮市）の町丁目別 窃盗認知件数。兵庫県警の公表資料をそのまま数え直したもの。2018-2025年。">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.css">
+<style>
+  :root{
+    --base:#FAFAF8; --ink:#1F2421; --rule:#D8DAD5; --sub:#5A615B; --panel:#FFFFFF;
+    --q1:#E6F2EE; --q2:#A8D9C7; --q3:#5FBBA0; --q4:#2A9179; --q5:#146455;
+    --none:#ECEDEA;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--base); color:var(--ink);
+    font-family:"Hiragino Kaku Gothic ProN","Yu Gothic Medium","Yu Gothic",Meiryo,sans-serif;
+    font-size:15px; line-height:1.7;
+  }
+  .wrap{max-width:760px; margin:0 auto; padding:0 16px}
+  .num{font-variant-numeric:tabular-nums}
+  h1{margin:0; font-size:18px; font-weight:600; line-height:1.45}
+  h2{font-size:13px; font-weight:600; margin:14px 0 4px}
+  a{color:inherit}
+
+  header{padding:14px 0 10px}
+  header p{margin:3px 0 0; font-size:13px; color:var(--sub)}
+
+  .scope{
+    margin:12px 0 0; border:1px solid var(--rule); background:var(--panel);
+    font-size:13px; line-height:1.65;
+  }
+  .scope p{margin:0; padding:9px 12px}
+  .scope .in{border-bottom:1px solid var(--rule)}
+  .scope b{font-weight:600; font-size:12px; color:var(--sub)}
+  .scope .out span{color:var(--sub); font-size:12px}
+  .scope .note{border-top:1px solid var(--rule)}
+  .scope .note span{color:var(--sub); font-size:12px}
+
+  .controls{display:grid; gap:8px; margin:10px 0 0}
+  .row{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+  label{display:block; font-size:12px; color:var(--sub); margin-bottom:2px}
+  select, input[type="search"]{
+    width:100%; padding:9px 10px; font:inherit; font-size:14px;
+    color:var(--ink); background:var(--panel);
+    border:1px solid var(--rule); border-radius:6px;
+  }
+  .switch{display:flex; border:1px solid var(--rule); border-radius:6px; overflow:hidden}
+  .switch button{
+    flex:1; padding:10px 6px; font:inherit; font-size:14px;
+    color:var(--ink); background:var(--panel); border:0; cursor:pointer;
+  }
+  .switch button + button{border-left:1px solid var(--rule)}
+  .switch button[aria-pressed="true"]{background:var(--q4); color:#fff}
+
+  .legend{margin:12px 0 8px}
+  .legend .bar{display:flex}
+  .legend .bar div{flex:1; text-align:center}
+  .legend .bar i{display:block; height:12px; border:1px solid var(--rule); border-right:0}
+  .legend .bar div:last-child i{border-right:1px solid var(--rule)}
+  .legend .bar span{display:block; font-size:11px; color:var(--sub); margin-top:3px; white-space:nowrap}
+  .legend .na{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--sub); margin:6px 0 0}
+  .legend .na i{width:14px; height:12px; flex:none; border:1px solid var(--rule)}
+  .legend .na i.sw-none{background:var(--none)}
+  .legend .na i.sw-hatch{
+    background:
+      repeating-linear-gradient(45deg, #9AA39C 0 1.6px, #FFFFFF 1.6px 5.6px);
+  }
+  .legend .na i.sw-wh{
+    background:#FFFFFF;
+    background-image:radial-gradient(#9AA39C 1px, transparent 1.2px);
+    background-size:4px 4px;
+  }
+
+  #map{height:46vh; min-height:280px; max-height:520px; border:1px solid var(--rule)}
+
+  .panel{
+    background:var(--panel); border:1px solid var(--rule); border-top:0;
+    padding:12px 14px 14px;
+  }
+  .panel .hint{margin:0; font-size:13px; color:var(--sub)}
+  .panel .head{display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin:0}
+  .panel .head strong{font-size:17px}
+  .panel .head span{font-size:13px; color:var(--sub)}
+
+  .figures{display:flex; gap:26px; flex-wrap:wrap; margin:8px 0 0}
+  .figures div{min-width:0}
+  .figures dt{font-size:12px; color:var(--sub)}
+  .figures dd{margin:0; font-size:24px; font-weight:600; line-height:1.25}
+  .figures dd small{font-size:13px; font-weight:400; color:var(--sub); margin-left:3px}
+  .figures .sub{font-size:12px; color:var(--sub); margin:0}
+
+  table{width:100%; border-collapse:collapse; font-size:13px; margin:2px 0 0}
+  th{text-align:left; font-weight:400; color:var(--sub); padding:2px 0; white-space:nowrap; width:7.6em}
+  td{padding:2px 0}
+  td.v{width:4em; text-align:right; white-space:nowrap}
+  .barcell{padding-left:8px}
+  .barcell i{display:block; height:9px; background:var(--q3); min-width:1px}
+
+  footer{padding:14px 0 30px; font-size:12.5px; color:var(--sub); line-height:1.7}
+  footer h2{font-size:12.5px; color:var(--ink); margin:12px 0 2px}
+  footer ul{margin:0; padding-left:1.15em}
+  .operator{border:1px solid var(--rule); background:var(--panel); padding:10px 12px; margin:14px 0 0}
+
+  :focus-visible{outline:2px solid var(--ink); outline-offset:1px}
+
+  @media (min-width:800px){
+    body{font-size:16px}
+    h1{font-size:21px}
+    #map{height:56vh}
+    .row{grid-template-columns:1fr 1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1 id="title">兵庫県の町丁目別 窃盗認知件数</h1>
+    <p id="subtitle">読み込んでいます</p>
+  </header>
+
+  <div class="scope">
+    <p class="in"><b>このマップに含まれているもの</b><br>
+      自転車盗・車上ねらい・部品ねらい・オートバイ盗・自動販売機ねらい・自動車盗・ひったくり</p>
+    <p class="out"><b>含まれていないもの</b><br>
+      空き巣・忍込みなどの侵入盗、暴力をともなう犯罪<br>
+      <span>兵庫県警のオープンデータに、町丁目別のデータがないためです。
+      こちらが選んで外したものではありません。</span></p>
+    <p class="out"><b>データはありますが、町丁目には出していないもの</b><br>
+      自動販売機ねらい・ひったくり<br>
+      <span>件数が少なく、町丁目に割るとほとんどが1〜2件になります。
+      1〜2件は実数を出さない決まりのため、町丁目の地図としては出さず、
+      市ごとの件数として出しています。<b>こちらの判断で外しています。</b></span></p>
+    <p class="note"><span>町丁目に出しているのは「自転車」と「車・バイク」の2つです。
+    手口を1つずつ出すと町丁目の升の大半が「1-2」になって地図が読めなくなるため、
+    近いものをまとめています。数字は8年の合計です。</span></p>
+  </div>
+
+  <div class="controls">
+    <div>
+      <label for="q">町丁目を探す</label>
+      <input type="search" id="q" list="cho-list" placeholder="例：潮江一丁目" autocomplete="off">
+      <datalist id="cho-list"></datalist>
+    </div>
+    <div class="row">
+      <div>
+        <label for="city">市</label>
+        <select id="city"></select>
+      </div>
+      <div>
+        <label for="layer">手口の層</label>
+        <select id="layer"></select>
+      </div>
+    </div>
+    <div class="switch" role="group" aria-label="地図に塗る数値">
+      <button type="button" id="btn-total" aria-pressed="true">件数</button>
+      <button type="button" id="btn-rate" aria-pressed="false">人口千人あたり</button>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="bar" id="legend-bar" aria-hidden="true"></div>
+    <p class="na"><i class="sw-hatch"></i><span id="legend-hatch">1〜2件の町丁目（実数を出していません）</span></p>
+    <p class="na" id="legend-wh-row"><i class="sw-wh"></i><span id="legend-wh">ほかの町丁目を守るため、実数を出していない町丁目</span></p>
+    <p class="na" id="legend-none-row"><i class="sw-none"></i><span id="legend-none">人口500人未満、または0件のため、人口千人あたりの値を出していない町丁目</span></p>
+  </div>
+
+  <div id="map" role="application" aria-label="町丁目の地図"></div>
+
+  <div class="panel" id="panel" aria-live="polite">
+    <p class="hint">地図で町丁目を選ぶか、上の「町丁目を探す」に地名を入れてください。件数と人口千人あたり件数の両方を表示します。</p>
+  </div>
+
+  <footer>
+    <h2>このサイトについて</h2>
+    <p style="margin:0">兵庫県警察が公開している犯罪オープンデータから、町丁目ごとの窃盗の認知件数を集計して地図にしています。年に1回、前年分が公開されたときに更新します。数えているのは次の7手口です。</p>
+    <p style="margin:4px 0 0">自転車盗／車上ねらい／部品ねらい／自動車盗／オートバイ盗／自動販売機ねらい／ひったくり</p>
+
+    <h2>数字の読み方</h2>
+    <ul>
+      <li>認知件数は、警察に届け出があったものに限られます。届け出のなかった被害は含まれません。</li>
+      <li>駅前や商業地など来街者の多い町丁目は、住んでいる人の数に対して件数が大きくなりやすい数字です。分母は夜間人口（住んでいる人）です。</li>
+      <li>乗り物盗の発生時刻・発生日には推定が含まれます。時間帯の内訳もその推定を含みます。</li>
+      <li>年は警察が認知した年です。被害に遭った時期がそれ以前の場合も含みます。</li>
+      <li>件数が1〜2件のときは「1-2」とまとめ、実数を出していません。地図では斜線にしています。</li>
+      <li id="note-wh" hidden>「非公開」と出している町丁目があります。1〜2件の町丁目がその市・その層で1つだけになると、ほかの数字からの引き算で実数が分かってしまいます。それを防ぐため、件数の多い町丁目もあわせて伏せ、同じ「非公開」にまとめています。<b>「非公開」は少ないという意味ではありません。</b></li>
+      <li>町丁目の数字は8年の合計だけです。年ごとの内訳は出していません。単年にすると町丁目のほとんどが1〜2件になり、1件が2件になった揺れを傾向のように読ませてしまうためです。年ごとの移り変わりは市全体の数字で見てください。</li>
+      <li>時間帯の内訳は<b>市全体</b>の数字です。町丁目ごとには出していません。</li>
+      <li>人口は令和2年国勢調査の値です。人口500人未満、または件数2件以下の町丁目は、人口千人あたりの値を出していません。</li>
+      <li>町丁目の大きさは市によって違います。西宮市のように山手まで含む市と、尼崎市のように狭く密集した市では、1つの町丁目が指す広さが違います。<b>市をまたいだ比較には向きません。</b></li>
+      <li>地図の色は、町丁目を順位で5等分するのではなく、決まった件数で区切っています。実際の区切りは凡例の数字のとおりです。市によって薄い・濃いの差が出ますが、そろえていません。</li>
+      <li>町丁目に出しているのは「自転車」と「車・バイク」の2つの層です。手口を1つずつ出すと、町丁目の升の大半が「1-2」になって地図が読めなくなるためです。</li>
+      <li>町丁目名が書かれていない届け出などにより、地図に反映できなかった行が約0.5%あります。</li>
+    </ul>
+
+    <h2>免責</h2>
+    <p style="margin:0">元の統計が後から訂正・更新されることがあり、実際と異なる場合があります。元データそのものの内容については、配布元にお問い合わせください。</p>
+
+    <h2>出典と利用規約</h2>
+    <ul>
+      <li>犯罪認知件数：兵庫県警察（<a href="https://web.pref.hyogo.lg.jp/kk26/johoseisaku/opendata.html">兵庫県 オープンデータ</a>）</li>
+      <li>町丁目境界・人口：<a href="https://www.e-stat.go.jp/gis">e-Stat 令和2年国勢調査 小地域</a></li>
+      <li>背景地図：<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院タイル</a></li>
+    </ul>
+
+    <div class="operator">
+      運営者　鯨屋（くじらや）<br>
+      　　　　大阪府・兵庫県で行政が公開する一次情報を、消える前に記録しています。<br>
+      連絡先　<a href="https://forms.gle/pp93tSJ5p8SAMEMk8">訂正・削除の申し出フォーム</a>（7日以内にご返信します）<br>
+      最終更新　<span id="updated">—</span>／更新頻度　年1回
+    </div>
+
+    <p style="margin-top:12px">
+      <a href="cho/">町丁目の一覧から探す</a>　／
+      <a href="policy.html">このサイトに載せているもの・載せていないもの</a>　／
+      <a href="https://github.com/VirgoB77/ogataten-nippo/blob/main/docs/kyotsu-shiyo.md">姉妹サイト共通仕様</a>
+    </p>
+  </footer>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.js"></script>
+<script>
+const SHADES = ["#E6F2EE", "#A8D9C7", "#5FBBA0", "#2A9179", "#146455"];
+const NONE = "#ECEDEA";
+
+let fc = null;
+let mode = "total";
+let layer = 0;           // properties.layers の位置
+let selected = null;
+
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Number(n).toLocaleString("ja-JP");
+
+/* ---------- データの読み方 ----------
+   geojson が持つのは「町丁目 × 層 × 期間の合計」だけ。値は伏せ処理ずみで
+   1〜2件は null。合計も年別も時間帯も町丁目には無い。
+   **画面側で件数を足し直さない。** 足せる形で配ると、ファイルを開くだけで
+   実数が読めてしまう（共通仕様5節）。合計と内訳を両方出すと引き算で戻る（3.2）。 */
+
+function periodLabel() {
+  return fc.properties.period.replace("-", "〜") + "年";
+}
+function layerName(i) {
+  return fc.properties.layers[i].name;
+}
+function label(v, withheld) {
+  if (withheld) return fc.properties.withheld_label;
+  return v === null ? fc.properties.suppress_label : String(v);
+}
+function ratePer1k(v, pop) {
+  // 0件は伏せない。件数そのものを 0 と出しているので、率を出しても戻るものが無い。
+  // 伏せると率の地図で 0件 が灰色に落ち、「0件はいちばん薄い階級の色」と食い違う。
+  if (v === null) return null;
+  if (pop < fc.properties.min_population) return null;
+  if (v >= 1 && v <= fc.properties.max_suppress_count) return null;
+  return Math.round(v / pop * 1000 * 100) / 100;
+}
+/* 表示している層の合計。出している升を足しただけの数なので出してよいが、
+   「総数」とは書かない。伏せた層があれば下限で書く（共通仕様3.2）。 */
+function shownTotal(n) {
+  const shown = n.filter((v) => v !== null);
+  const hidden = n.length - shown.length;
+  // 伏せた升の下限は1件。補完的伏せでも3を足さない（3件以上だと漏れる）
+  const v = shown.reduce((a, b) => a + b, 0) + hidden;
+  return { text: fmt(v), unit: hidden ? "件以上" : "件" };
+}
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: {
+    version: 8,
+    sources: {
+      gsi: {
+        type: "raster",
+        tiles: ["https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png"],
+        tileSize: 256, maxzoom: 18,
+        attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>'
+      }
+    },
+    layers: [{ id: "gsi", type: "raster", source: "gsi" }]
+  },
+  center: [135.406, 34.733], zoom: 11.6, minZoom: 9, maxZoom: 17
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+map.addControl(new maplibregl.ScaleControl({ maxWidth: 100, unit: "metric" }));
+
+/* ---------- 色 ----------
+   分位（順位）ではなく、決まった数で区切る（共通仕様3.3）。
+   階級の下端は3から始める。切れ目が1〜2の中を通ると、1件と2件が別の色に落ちて、
+   画面が「1-2」と書いた横で色と凡例が答えてしまう（共通仕様3.2）。
+   伏せた升は階級に入れず斜線。0件はいちばん薄い色。 */
+
+function breaks() {
+  return mode === "total" ? fc.properties.class_total : fc.properties.class_rate;
+}
+
+function hatchImage() {
+  const s = 8, c = document.createElement("canvas");
+  c.width = c.height = s;
+  const x = c.getContext("2d");
+  x.fillStyle = "#FFFFFF"; x.fillRect(0, 0, s, s);
+  x.strokeStyle = "#9AA39C"; x.lineWidth = 1.6;
+  x.beginPath();
+  x.moveTo(-s, s); x.lineTo(s, -s);
+  x.moveTo(0, 2 * s); x.lineTo(2 * s, 0);
+  x.moveTo(-s, 2 * s); x.lineTo(2 * s, -s);
+  x.stroke();
+  return x.getImageData(0, 0, s, s);
+}
+
+/* 補完的伏せ（3件以上だが、ほかの升を守るために伏せた）。
+   斜線（1〜2件）とは別の見た目にする。同じにすると、読者は
+   「この町丁目も1〜2件」と読む。意味が違う（共通仕様3.2）。 */
+function dotImage() {
+  const s = 8, c = document.createElement("canvas");
+  c.width = c.height = s;
+  const x = c.getContext("2d");
+  x.fillStyle = "#FFFFFF"; x.fillRect(0, 0, s, s);
+  x.fillStyle = "#9AA39C";
+  for (const [a, b] of [[2, 2], [6, 6]]) {
+    x.beginPath(); x.arc(a, b, 1.1, 0, Math.PI * 2); x.fill();
+  }
+  return x.getImageData(0, 0, s, s);
+}
+
+function fillColor() {
+  const field = mode === "total" ? "v" : "r";
+  const expr = ["step", ["coalesce", ["get", field], -1], SHADES[0]];
+  breaks().forEach((v, i) => expr.push(v, SHADES[i + 1]));
+  return mode === "rate" ? ["case", ["get", "rna"], NONE, expr] : expr;
+}
+
+function drawLegend() {
+  const b = breaks();
+  const isTotal = mode === "total";
+  const n = (v) => isTotal ? String(v) : v.toFixed(1);
+  const range = (lo, hi) => {
+    if (!isTotal) return n(lo) + "〜" + n(hi);
+    return lo === hi - 1 ? n(lo) : n(lo) + "〜" + n(hi - 1);
+  };
+  const labels = [
+    isTotal ? "0" : "〜" + n(b[0]),
+    range(b[0], b[1]), range(b[1], b[2]), range(b[2], b[3]), n(b[3]) + "〜",
+  ];
+  $("legend-bar").innerHTML = labels.map((t, i) =>
+    '<div><i style="background:' + SHADES[i] + '"></i><span>' + t + '</span></div>'
+  ).join("");
+  // 対応する区画が1つも無い鍵は出さない。
+  // 「非公開」の札はまとまり単位でそろえてあるので、1〜2件の升も混ざっている。
+  // 「1〜2件ではありません」とは書けない（嘘になる）。
+  const anySmall = fc.features.some((f) => f.properties.s);
+  const anyWh = fc.features.some((f) => f.properties.wh);
+  $("legend-hatch").parentElement.style.display = anySmall ? "" : "none";
+  $("legend-hatch").textContent = "1〜2件の町丁目（実数を出していません）";
+  $("legend-wh-row").style.display = anyWh ? "" : "none";
+    // 注記も同じ条件で出す。実在しない札の読み方を常時出さない。
+    $("note-wh").hidden = !anyWh;
+  $("legend-wh").textContent =
+    "実数を出していない町丁目（ほかの町丁目を守るため、まとめて伏せています）";
+  $("legend-none-row").style.display = isTotal ? "none" : "";
+  $("legend-none").textContent =
+    "人口" + fmt(fc.properties.min_population) + "人未満、または0件のため、"
+    + "人口千人あたりの値を出していない町丁目";
+}
+
+function recompute() {
+  for (const f of fc.features) {
+    const p = f.properties;
+    p.v = p.n[layer];
+    p.wh = p.w[layer] === true;               // 補完的伏せ → 点
+    p.s = p.v === null && !p.wh;              // 1〜2件 → 斜線
+    p.r = ratePer1k(p.v, p.jinko);
+    p.rna = !p.s && !p.wh && p.r === null;    // 率を出していない → グレー
+  }
+  const src = map.getSource("cho");
+  if (src) src.setData(fc);
+  if (map.getLayer("cho-fill")) map.setPaintProperty("cho-fill", "fill-color", fillColor());
+  drawLegend();
+  if (selected) showArea(selected);
+}
+
+/* ---------- 画面 ---------- */
+
+/* 横棒。**幅も数字である。** 伏せた升は棒を出さず、分母は固定の目盛りにする。 */
+function barScale(values) {
+  const top = Math.max(0, ...values.filter((v) => v !== null));
+  if (top <= 0) return 1;
+  let step = 1;
+  for (;;) {
+    for (const m of [1, 2, 5]) if (step * m >= top) return step * m;
+    step *= 10;
+  }
+}
+function bars(rows, unit) {
+  const scale = barScale(rows.map((r) => r[1]));
+  return '<table>' + rows.map(([k, v, wh]) => {
+    // 補完的伏せも棒を出さない。幅は「3件以上」であることを漏らす。
+    const w = wh || v === null || v <= 0 ? 0 : Math.min(100, v / scale * 100);
+    return '<tr><th scope="row">' + k + '</th>' +
+      '<td class="v num">' + label(v, wh) + (wh ? '' : unit) + '</td>' +
+      '<td class="barcell">' + (w ? '<i style="width:' + w + '%"></i>' : '') + '</td></tr>';
+  }).join('') + '</table>';
+}
+
+function showArea(p) {
+  selected = p;
+  if (map.getLayer("cho-selected")) {
+    map.setFilter("cho-selected", ["==", ["get", "code"], p.code]);
+  }
+  const P = fc.properties;
+  const v = p.n[layer];
+  const wh = p.w[layer] === true;
+  const r = wh ? null : ratePer1k(v, p.jinko);
+  const avg = P.city_rate[layer];
+  const tot = shownTotal(p.n);
+
+  // 伏せた理由を取り違えない。補完的伏せの升は件数が3件以上あり、
+  // 「人口または件数が小さい」は当てはまらない。
+  const rateNote = wh
+    ? '<p class="sub">ほかの町丁目を守るため、この町丁目の数字は出していません</p>'
+    : r === null
+    ? '<p class="sub">人口または件数が小さいため出していません</p>'
+    : '<p class="sub num">' + P.city + '全体 ' + (avg === null ? "—" : avg) + '件</p>';
+
+  $("panel").innerHTML =
+    '<p class="head"><strong>' + p.name + '</strong>' +
+      '<span>' + P.city + '／人口 <span class="num">' + fmt(p.jinko) + '</span> 人（令和2年）</span></p>' +
+    '<dl class="figures">' +
+      '<div><dt>' + layerName(layer) + '（' + periodLabel() + '）</dt>' +
+        '<dd class="num">' + label(v, wh) +
+          (wh ? '' : '<small>件</small>') + '</dd></div>' +
+      '<div><dt>人口千人あたり</dt>' +
+        '<dd class="num">' + (r === null ? "—" : r.toFixed(2)) + '<small>件</small></dd>' +
+        rateNote + '</div>' +
+    '</dl>' +
+    '<h2>層ごとの件数（' + periodLabel() + '）</h2>' +
+    bars(P.layers.map((l, i) => [l.name, p.n[i], p.w[i] === true]), "件") +
+    '<p class="sub">表示している手口の合計 ' + tot.text + tot.unit +
+      '／' + P.city_only.join("・") + 'は町丁目には出していません</p>' +
+    '<h2>発生した時間帯（' + P.city + '全体・推定を含む）</h2>' +
+    '<p class="sub">この町丁目のものではありません。</p>' +
+    bars(P.hour_bands.map((b, i) => [b + "時", P.city_hours[i], false]), "件") +
+    '<p style="margin:12px 0 0"><a href="cho/' + p.code + '.html">この町丁目のページ</a></p>';
+}
+
+/* ---------- 読み込み ---------- */
+
+function whenMapReady(fn) {
+  if (map.isStyleLoaded()) fn();
+  else map.once("load", fn);
+}
+
+/* MapLibre は geojson の入れ子のプロパティ（配列・オブジェクト）を
+   **文字列にして**返す。クリックで受け取った properties をそのまま使うと
+   p.n が文字列になり、パネルが落ちる。元の feature を code で引き直す。 */
+function areaByCode(code) {
+  const f = fc.features.find((x) => x.properties.code === code);
+  return f ? f.properties : null;
+}
+
+async function loadCity(code) {
+  fc = await (await fetch("data/build/" + code + ".geojson")).json();
+  selected = null;
+
+  const P = fc.properties;
+  $("title").textContent = P.city + "　町丁目別 窃盗認知件数";
+  $("subtitle").textContent = P.pref + "／" + P.areas + "区画／" + periodLabel() + "の合計";
+
+  const lSel = $("layer");
+  lSel.innerHTML = "";
+  P.layers.forEach((l, i) => {
+    const o = document.createElement("option");
+    o.value = String(i);
+    o.textContent = l.name + "（" + l.teguchi.join("・") + "）";
+    lSel.appendChild(o);
+  });
+  if (layer >= P.layers.length) layer = 0;
+  lSel.value = String(layer);
+
+  const dl = $("cho-list");
+  dl.innerHTML = "";
+  fc.features.forEach((f) => {
+    const o = document.createElement("option");
+    o.value = f.properties.name;
+    dl.appendChild(o);
+  });
+  $("q").value = "";
+
+  whenMapReady(() => {
+    if (!map.hasImage("hatch")) map.addImage("hatch", hatchImage());
+    if (!map.hasImage("dots")) map.addImage("dots", dotImage());
+    if (map.getSource("cho")) {
+      recompute();
+    } else {
+      map.addSource("cho", { type: "geojson", data: fc });
+      map.addLayer({
+        id: "cho-fill", type: "fill", source: "cho",
+        filter: ["all", ["!=", ["get", "s"], true], ["!=", ["get", "wh"], true]],
+        paint: { "fill-color": SHADES[0], "fill-opacity": 0.78 }
+      });
+      // 伏せた升は階級とは別の見た目にする（共通仕様3.2）。
+      // 0件と同じ色にすると「ここでは起きていない」と読まれる。
+      map.addLayer({
+        id: "cho-hatch", type: "fill", source: "cho",
+        filter: ["==", ["get", "s"], true],
+        paint: { "fill-pattern": "hatch", "fill-opacity": 0.9 }
+      });
+      map.addLayer({
+        id: "cho-withheld", type: "fill", source: "cho",
+        filter: ["==", ["get", "wh"], true],
+        paint: { "fill-pattern": "dots", "fill-opacity": 0.9 }
+      });
+      map.addLayer({
+        id: "cho-line", type: "line", source: "cho",
+        paint: { "line-color": "#FFFFFF", "line-width": 0.6, "line-opacity": 0.9 }
+      });
+      map.addLayer({
+        id: "cho-selected", type: "line", source: "cho",
+        filter: ["==", ["get", "code"], ""],
+        paint: { "line-color": "#1F2421", "line-width": 2 }
+      });
+      const pick = (e) => {
+        const p = areaByCode(e.features[0].properties.code);
+        if (p) showArea(p);
+      };
+      for (const id of ["cho-fill", "cho-hatch", "cho-withheld"]) {
+        map.on("click", id, pick);
+      }
+      for (const id of ["cho-fill", "cho-hatch", "cho-withheld"]) {
+        map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
+        map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
+      }
+      recompute();
+    }
+    map.jumpTo({ center: P.center, zoom: P.zoom });
+  });
+  recompute();
+
+  $("panel").innerHTML =
+    '<p class="hint">地図で町丁目を選ぶか、上の「町丁目を探す」に地名を入れてください。' +
+    '件数と人口千人あたり件数の両方を表示します。</p>';
+}
+
+function setMode(next) {
+  mode = next;
+  $("btn-total").setAttribute("aria-pressed", String(next === "total"));
+  $("btn-rate").setAttribute("aria-pressed", String(next === "rate"));
+  recompute();
+}
+$("btn-total").onclick = () => setMode("total");
+$("btn-rate").onclick = () => setMode("rate");
+$("layer").onchange = (e) => { layer = Number(e.target.value); recompute(); };
+$("city").onchange = (e) => loadCity(e.target.value);
+
+$("q").addEventListener("change", () => {
+  const name = $("q").value.trim();
+  const f = fc.features.find((x) => x.properties.name === name);
+  if (!f) return;
+  showArea(f.properties);
+  const c = f.geometry.coordinates.flat(Infinity);
+  let x = 0, y2 = 0, n = 0;
+  for (let i = 0; i < c.length; i += 2) { x += c[i]; y2 += c[i + 1]; n++; }
+  map.easeTo({ center: [x / n, y2 / n], zoom: Math.max(map.getZoom(), 14), duration: 600 });
+});
+
+(async function start() {
+  const index = await (await fetch("data/build/index.json")).json();
+  $("updated").textContent = index.generated_at;
+  const cSel = $("city");
+  index.cities.forEach((c) => {
+    const o = document.createElement("option");
+    o.value = c.code;
+    o.textContent = c.name;
+    cSel.appendChild(o);
+  });
+  cSel.value = index.cities[0].code;
+  await loadCity(index.cities[0].code);
+})();
+</script>
+</body>
+</html>

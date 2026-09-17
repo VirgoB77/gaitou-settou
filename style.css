@@ -1,0 +1,81 @@
+/* 全ページ共通。公共統計を扱うサイトとしての落ち着きを優先する。
+   赤・オレンジ・黄は使わない。量は単色の濃淡5段階で表す。 */
+
+:root{
+  --base:#FAFAF8; --ink:#1F2421; --rule:#D8DAD5; --sub:#5A615B; --panel:#FFFFFF;
+  --q1:#E6F2EE; --q2:#A8D9C7; --q3:#5FBBA0; --q4:#2A9179; --q5:#146455;
+  --none:#ECEDEA;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--base); color:var(--ink);
+  font-family:"Hiragino Kaku Gothic ProN","Yu Gothic Medium","Yu Gothic",Meiryo,sans-serif;
+  font-size:15px; line-height:1.7;
+}
+.wrap{max-width:760px; margin:0 auto; padding:0 16px}
+.num{font-variant-numeric:tabular-nums}
+
+h1{margin:0; font-size:18px; font-weight:600; line-height:1.45}
+h2{font-size:13px; font-weight:600; margin:14px 0 4px}
+a{color:inherit}
+
+header{padding:14px 0 10px}
+header p{margin:3px 0 0; font-size:13px; color:var(--sub)}
+
+.crumb{font-size:12.5px; color:var(--sub); padding:12px 0 0}
+.crumb a{color:inherit}
+
+/* 数字 */
+.figures{display:flex; gap:26px; flex-wrap:wrap; margin:8px 0 0}
+.figures div{min-width:0}
+.figures dt{font-size:12px; color:var(--sub)}
+.figures dd{margin:0; font-size:24px; font-weight:600; line-height:1.25}
+.figures dd small{font-size:13px; font-weight:400; color:var(--sub); margin-left:3px}
+.figures .sub{font-size:12px; color:var(--sub); margin:0}
+
+/* 横棒の表 */
+table{width:100%; border-collapse:collapse; font-size:13px; margin:2px 0 0}
+th{text-align:left; font-weight:400; color:var(--sub); padding:2px 0; white-space:nowrap; width:7.6em}
+td{padding:2px 0}
+td.v{width:3.4em; text-align:right; white-space:nowrap}
+.barcell{padding-left:8px}
+.barcell i{display:block; height:9px; background:var(--q3); min-width:1px}
+
+/* 本文ページ */
+.prose h2{font-size:16px; margin:26px 0 6px}
+.prose p{margin:0 0 10px}
+.prose ul{margin:0 0 10px; padding-left:1.3em}
+.prose li{margin:0 0 4px}
+.prose .lead{font-size:15.5px}
+
+/* 隣の町丁目 */
+.neighbors{display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 0; padding:0; list-style:none}
+.neighbors a{
+  display:inline-block; padding:5px 10px; font-size:13px; text-decoration:none;
+  background:var(--panel); border:1px solid var(--rule); border-radius:14px;
+}
+.neighbors a:hover{background:var(--q1)}
+
+footer{padding:14px 0 30px; font-size:12.5px; color:var(--sub); line-height:1.7}
+footer h2{font-size:12.5px; color:var(--ink); margin:12px 0 2px}
+footer ul{margin:0; padding-left:1.15em}
+
+:focus-visible{outline:2px solid var(--ink); outline-offset:1px}
+
+@media (min-width:800px){
+  body{font-size:16px}
+  h1{font-size:21px}
+  .prose h2{font-size:17px}
+}
+
+/* 含まれているもの・含まれていないもの（トップと各ページの冒頭に置く） */
+.scope{
+  margin:12px 0; border:1px solid var(--rule); background:var(--panel);
+  font-size:13px; line-height:1.65;
+}
+.scope p{margin:0; padding:9px 12px}
+.scope .in{border-bottom:1px solid var(--rule)}
+.scope b{font-weight:600; font-size:12px; color:var(--sub)}
+.scope .out span{color:var(--sub); font-size:12px}
+.scope .note{border-top:1px solid var(--rule)}
