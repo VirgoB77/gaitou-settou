@@ -94,9 +94,18 @@ jobs:
       # 落ちたらここで止まり、取りに行かない。伏せ忘れがあると取りに行く前に止まる。
       - name: 検査する（昨日の出力に対して）
         run: |
-          python -m unittest discover -s tests
-          python scripts/check_small_counts.py
-          python scripts/check_copy.py
+          # **最初の1件で止めない。** 止めると2件目以降が隠れる（共通仕様9節）。
+          # 実際そうなっていた。text_parents が落ちたとき、check_copy も
+          # 同じ理由で落ちる状態だったのに見えなかった（2026-09-18）。
+          ng=0
+          for c in "-m unittest discover -s tests" \
+                   "scripts/check_small_counts.py" \
+                   "scripts/check_copy.py"; do
+            echo "::group::$c"
+            python $c || { echo "★ 落ちた: $c"; ng=1; }
+            echo "::endgroup::"
+          done
+          [ $ng -eq 0 ] || { echo "検査が落ちた。★ の付いたものを全部見ること"; exit 1; }
 
       - name: 取ってくる
         run: python scripts/fetch_data.py
@@ -134,9 +143,18 @@ jobs:
       # ここで止める（止まっても生データはもう金庫にある）。
       - name: もう一度検査する（作ったものに対して）
         run: |
-          python -m unittest discover -s tests
-          python scripts/check_small_counts.py
-          python scripts/check_copy.py
+          # **最初の1件で止めない。** 止めると2件目以降が隠れる（共通仕様9節）。
+          # 実際そうなっていた。text_parents が落ちたとき、check_copy も
+          # 同じ理由で落ちる状態だったのに見えなかった（2026-09-18）。
+          ng=0
+          for c in "-m unittest discover -s tests" \
+                   "scripts/check_small_counts.py" \
+                   "scripts/check_copy.py"; do
+            echo "::group::$c"
+            python $c || { echo "★ 落ちた: $c"; ng=1; }
+            echo "::endgroup::"
+          done
+          [ $ng -eq 0 ] || { echo "検査が落ちた。★ の付いたものを全部見ること"; exit 1; }
 
       - name: 結果をしまう
         run: |

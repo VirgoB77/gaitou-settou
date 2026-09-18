@@ -207,5 +207,60 @@ class TestComplementSuppress(unittest.TestCase):
         self.assertEqual(privacy.label_for_state(privacy.SHOWN, 0), "0件")
 
 
+class TestIsCorpBeyondWordList(unittest.TestCase):
+    """語の一覧だけでは足りないもの（共通仕様3.1・5節）。
+
+    2026-09-19：正本 #52 に合わせたとき、こちらに2つ無かった。
+    カタカナ・ローマ字と、国と地方公共団体。呼んでいないから気づけなかった
+    （このサイトは当事者を持たないので party_kind は常に "none"）。
+    **共有モジュールは、使っていなくてもそろえる。** 次に写した人が古いものを持つ。
+    """
+
+    def test_katakana_or_romaji_is_corp(self):
+        """戸籍の氏名はこの形にならない。"""
+        for n in ("オークワ　ほか", "F.O.B COOP", "コープさっぽろ"):
+            self.assertTrue(privacy.is_corp(n), n)
+
+    def test_government_is_corp(self):
+        """法人格の語を持たないが個人ではない。"""
+        for n in ("大阪市", "兵庫県", "大阪市交通局", "○○町教育委員会", "国"):
+            self.assertTrue(privacy.is_corp(n), n)
+
+    def test_person_stays_person(self):
+        for n in ("山田太郎", "カタカナ商事"):
+            self.assertFalse(privacy.is_corp(n), n)
+
+    def test_not_a_name_stays_person_side(self):
+        """名前でない文言は「個人」側に置く。置き換えは呼び出し側の仕事。"""
+        for n in ("未定", "（未定）", "―", "物品販売業を営む店舗"):
+            self.assertFalse(privacy.is_corp(n), n)
+
+    def test_shifted_address_is_not_government(self):
+        """列がずれて住所が入ったものを自治体と取り違えない（伏せる側に倒す）。
+
+        `…町` で終わるので、素朴に末尾だけ見ると自治体名と衝突する。
+        """
+        for n in ("大阪市北区角田町３番25号", "大阪市北区角田町"):
+            self.assertFalse(privacy.is_corp(n), n)
+
+    def test_truncated_corp_name_is_person_side(self):
+        """法人名が途中で切れたものも伏せる側。置き換えや削除はしない。"""
+        for n in ("三井住友ファイナンス", "大和ハウスリアルティ"):
+            self.assertFalse(privacy.is_corp(n), n)
+
+
+class TestPartyKindDisclosed(unittest.TestCase):
+    """undisclosed にしてよいのは、名前の欄が無いと確かめたときだけ。"""
+
+    def test_default_is_individual_not_undisclosed(self):
+        self.assertEqual(privacy.party_kind("山田太郎"), "individual")
+
+    def test_disclosed_false_is_undisclosed(self):
+        self.assertEqual(privacy.party_kind("", disclosed=False), "undisclosed")
+
+    def test_corp_is_corp(self):
+        self.assertEqual(privacy.party_kind("株式会社テスト"), "corp")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

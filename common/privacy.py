@@ -41,10 +41,59 @@ _CORP_WORDS = [
 ]
 
 
+# 国と地方公共団体。法人格の語を持たないが個人ではない（共通仕様3.1）。
+_GOV_TAIL = ("都", "道", "府", "県", "市", "区", "町", "村")
+_GOV_WORDS = ("局", "委員会", "役所", "議会", "公所", "一部事務組合", "広域連合")
+
+
+def _is_gov(n):
+    """`大阪市` `兵庫県` `大阪市交通局` `○○町教育委員会` のたぐい。"""
+    if n == "国" or n.startswith("国　") or n.startswith("国 "):
+        return True
+    if any(w in n for w in _GOV_WORDS):
+        return True
+    # 末尾が都道府県市区町村。ただし**列がずれて住所が入った**ものと衝突する
+    # （`大阪市北区角田町３番25号`）。正本はそれを「個人として扱う（伏せる側に倒す）」
+    # と定めているので、住所らしいものはここで当てない。
+    #   ・数字を含む  ・丁目/番/号/地 を含む  ・自治体名にしては長い
+    if any(c.isdigit() for c in n) or any(w in n for w in ("丁目", "番", "号", "地")):
+        return False
+    return len(n) <= 6 and n.endswith(_GOV_TAIL)
+
+
+def _is_kana_or_romaji(n):
+    """カタカナだけ、またはローマ字入り（共通仕様3.1）。
+
+    戸籍の氏名はこの形にならないので、`オークワ　ほか` `F.O.B COOP` を
+    個人と取り違えない。
+
+    **ただし、名前をカタカナで書く一次情報では誤る。** そういう配布元に
+    当たったら、ここではなく呼び出し側で止めること（3.1 に相談する）。
+    """
+    # 「ほか」「他」は名前ではなく注記。落としてから見る。
+    # 正本の例 `オークワ　ほか` は、落とさないとカタカナだけに見えない。
+    core = n
+    for tail in ("ほか", "他", "外", "など", "ら"):
+        core = core.replace(tail, "")
+    core = "".join(c for c in core
+                   if not c.isspace() and c not in "・，,.／/－-＆&（）()")
+    if not core:
+        return False
+    if any("a" <= c.lower() <= "z" for c in core):
+        return True
+    return all("ァ" <= c <= "ヶ" or c == "ー" for c in core)
+
+
 def is_corp(name):
-    """法人格を表す語を含むか。含まなければ個人として扱う。"""
+    """法人格を表す語を含むか。含まなければ個人として扱う。
+
+    語の一覧だけでは足りない。カタカナ・ローマ字と、国と地方公共団体を
+    別に見る（共通仕様3.1・5節）。
+    """
     n = (name or "")
-    return any(w in n for w in _CORP_WORDS)
+    if any(w in n for w in _CORP_WORDS):
+        return True
+    return _is_gov(n) or _is_kana_or_romaji(n)
 
 
 def redact_name(name):
@@ -75,6 +124,10 @@ def party_kind(name, disclosed=True):
 
     横断ハブで「法人が買った跡地」を絞るとき、undisclosed を individual に
     混ぜると取りこぼし、none に混ぜると意味が壊れる。4つを分ける。
+
+    **disclosed=False にしてよいのは、名前の欄が無いことを確かめたときだけ。**
+    読めていないだけなら "individual"（町丁目まで丸める側）にする。
+    確かめずに undisclosed にすると、こちらの解析の穴が、そのまま地番の公開になる。
     """
     if not disclosed:
         return "undisclosed"
