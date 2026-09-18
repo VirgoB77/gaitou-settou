@@ -1,4 +1,7 @@
 data/raw/
+# workflow が金庫をここに展開する（actions/checkout の path: _raw）。
+# 手で git add -A したときに、金庫の中身が公開側に入るのを防ぐ。
+_raw/
 *.zip
 __pycache__/
 .venv/

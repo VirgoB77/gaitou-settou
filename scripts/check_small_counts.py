@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "common"))
 import config
 import privacy
+import tracked
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -303,14 +304,10 @@ def text_parents(idx):
             groups.append((f"全市の{t}", [t], sh, kk))
 
     hits = []
-    for path in sorted(config.ROOT.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(config.ROOT).as_posix()
-        if rel.startswith((".git/", "data/raw/", "docs/")) or "__pycache__" in rel:
-            continue
-        if path.suffix not in {".py", ".md", ".html", ".yml", ".yaml", ".txt"}:
-            continue
+    rels, how = tracked.published({".py", ".md", ".html", ".yml", ".yaml", ".txt"})
+    text_parents.how = how      # 呼び出し側が「どう決めたか」を言えるように
+    for rel in rels:
+        path = config.ROOT / rel
         try:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):

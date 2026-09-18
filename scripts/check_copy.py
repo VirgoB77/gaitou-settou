@@ -13,6 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import config
+import tracked
+import pathlib
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -78,16 +80,9 @@ def scan(path):
 
 def main():
     # scripts は外さない。公開する木に入るので、コメントも人が読める。
-    skip = {".git", "docs", "__pycache__"}
-    skip_paths = not_published()
-    files = sorted(
-        p for p in config.ROOT.rglob("*")
-        if p.suffix in TARGET_SUFFIX
-        and not (set(p.relative_to(config.ROOT).parts) & skip)
-        and p.name not in SELF
-        and "data/raw" not in p.relative_to(config.ROOT).as_posix()
-        and not _under(p.relative_to(config.ROOT).as_posix(), skip_paths)
-    )
+    # どれを見るかは tracked に任せる（git の追跡 ＋ 公開対象の2条件）。
+    rels, how = tracked.published(TARGET_SUFFIX)
+    files = [config.ROOT / r for r in rels if pathlib.Path(r).name not in SELF]
     total = 0
     for path in files:
         hits = scan(path)
@@ -97,7 +92,7 @@ def main():
             for line, word, around in hits:
                 print(f"    {line}行目  「{word}」  …{around}…")
 
-    print(f"\n調べたファイル {len(files)} 件")
+    print(f"\n調べたファイル {len(files)} 件（{how}）")
     if total:
         print(f"評価語が {total} か所ありました。直してください。")
         return 1
