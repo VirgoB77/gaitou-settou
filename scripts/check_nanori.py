@@ -29,6 +29,8 @@
   ・日付の値そのものが正しいか。名乗りの向きだけを見る
   ・JS が埋めた後の画面。静的なHTMLからは見えないので、①で script を読む
   ・`period` の中身が本当にその年のデータか。在ることしか見ていない
+  ・`date` が何を指すべきか。**共通仕様6節の話で、ここでは決められない。**
+    `period` から導けているかだけを見ている
   ・手書きの `policy.html`。作り直さないので③の対象にならない
 """
 
@@ -90,7 +92,20 @@ def dan2_data():
         elif got != bi.get("period"):
             # 揃っていないと、ページごとに違う期間を名乗る
             bad.append(f'{c["name"]} の period が {got}。index.json は {bi.get("period")}')
-    return bad, f"index.json と geojson {mita} 件"
+
+    # `date` は**その日に何かが起きた日ではない。** 期間の終わりを埋めただけ。
+    # 窓を1年ずらしたとき、ここが置き去りになると「2025年のこと」と読まれる。
+    # period から導けているかだけを見る（値の意味は共通仕様6節の話）。
+    rec = json.loads((ROOT / "index.json").read_text(encoding="utf-8"))
+    zure = []
+    for r in rec["records"]:
+        owari = (r.get("period") or "").split("-")[-1]
+        if not owari or r.get("date") != f"{owari}-12-31":
+            zure.append(f'{r["id"]} date={r.get("date")} period={r.get("period")}')
+    if zure:
+        bad.append(f"date が period の終わりから導けていない record が {len(zure):,} 件: "
+                   f"{zure[:2]}")
+    return bad, f"index.json と geojson {mita} 件・record {len(rec['records']):,} 件"
 
 
 def dan3_shutsuryoku():

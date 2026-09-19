@@ -362,6 +362,12 @@ def cross_site_index(fcs, city_teguchi):
                     "id": f'{config.SITE_ID}:{P["city_code"]}:{p["code"]}:{layer["key"]}',
                     "title": f'{p["name"]}（{P["city"]}）{period}年の{layer["name"]}の窃盗認知件数',
                     "kind": f'犯罪統計/{layer["name"]}',
+                    # **この日に何かが起きた日ではない。** 期間の終わりを埋めている。
+                    # `config.py` の `date`（府県警CSVの「発生年月日（始期）」）とは
+                    # 別物。同じ名前で別の意味を持っている。
+                    # 名前が意味を決めていないので、読む側は「2025年のこと」と
+                    # 取りうる。6節の欄なので値は勝手に変えない（統括に照会中）。
+                    # period から導けているかは check_nanori の②が見る。
                     "date": f'{P["years"][-1]}-12-31',
                     "period": period,
                     "pref": P["pref"],
@@ -376,6 +382,10 @@ def cross_site_index(fcs, city_teguchi):
                     "url": f'{config.SITE_URL}/cho/{p["code"]}.html',
                     "source_url": P["source_url"],
                     "fetched_on": P["fetched_on"],
+                    # **いつの人口かを、名前も値も持っていない。** 令和2年国勢調査。
+                    # ページには「人口は令和2年国勢調査の値です」と出しているが、
+                    # この record を機械で読む側には年が届かない。
+                    # 6節の欄なので欄を増やすのも勝手にやらない（統括に照会中）。
                     "population": p["jinko"],
                     "count": total,
                     # 機械は count_label で読み分ける（共通仕様6節）。
