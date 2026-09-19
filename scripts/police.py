@@ -69,11 +69,50 @@ def load(city_code, year):
     return rows
 
 
+# 突合できなかった行を入れる箱（共通仕様6節 `not_counted`）。
+# **4つとも出す。0でも出す。** 欠けている鍵は0ではない。
+# 3つしか出さないサイトがあると、横断で読む側は「0」と「数えていない」を
+# 見分けられない。
+#
+# 分けるのは**語が書いてあるか**。制度で分けない。
+# 読めている語まで「見に行っていない」に落ちる。
+#
+#   unobserved … 語が無い。こちらが出どころを足す
+#   unresolved … 語は読めた。こちらが足せば解ける（語彙・新しい年次の境界）
+#   undecided  … 語は読めた。**こちらでは減らせない**（元データに丁目が無い等）
+#   gone       … 消えた。時間が決める
+#
+# **箱は理由を決める場所で決める。** 対応表を別の場所に置くと、
+# 理由を足した日に黙る（共通仕様4節）。
+HAKO = ("unresolved", "unobserved", "undecided", "gone")
+
+
+class hazure(str):
+    """突合できなかった理由。**箱を持った文字列。**
+
+    `str` を継いでいるので、いままで理由を文字列として書き出している所
+    （`unmatched.csv`）はそのまま動く。箱は `.hako` で取る。
+
+    箱を引数で強制するのは、**理由を足した日に箱を忘れないため。**
+    別に対応表を置くと、そこを直し忘れても動いてしまう。
+    """
+
+    def __new__(cls, riyuu, hako):
+        if hako not in HAKO:
+            raise ValueError(f"知らない箱: {hako}。{HAKO} のどれかにすること")
+        o = super().__new__(cls, riyuu)
+        o.hako = hako
+        return o
+
+
 def match(row, bd):
-    """1行を町丁目区画に突合する。(区画 or None, 理由, 正規化後の名前)。"""
+    """1行を町丁目区画に突合する。(区画 or None, 理由, 正規化後の名前)。
+
+    突合できなかった理由は `hazure()` を通して返す。**箱を必ず添える。**
+    """
     name = row[C["cho"]]
     if not name.strip():
-        return None, "町丁目が空欄", ""
+        return None, hazure("町丁目が空欄", "unobserved"), ""
 
     key = normalize(name)
     area = bd.get(key)
@@ -84,18 +123,18 @@ def match(row, bd):
     if parent is None:
         # 県警側が丁目を省いている（潮江、南塚口町 など）。
         # どの丁目か決められないので寄せない。
-        return None, "丁目の記載がなく、どの区画か決められない", key
+        return None, hazure("丁目の記載がなく、どの区画か決められない", "undecided"), key
 
     if bd.get(parent):
         if bd.has_chome_children(parent):
             # 例）名神町3丁目。e-Stat に 名神町1丁目・2丁目 が別にあるため、
             # 丁目なしの「名神町」に寄せると推測になる。
-            return None, f"e-Statに「{parent}」と丁目が併存し、寄せると推測になる", key
+            return None, hazure(f"e-Statに「{parent}」と丁目が併存し、寄せると推測になる", "undecided"), key
         # 例）武庫之荘西2丁目。e-Stat は「武庫之荘西」を丁目に分けていない。
         # 範囲は同じなので、親に寄せてよい。
         return bd.get(parent), f"e-Statが丁目に分けていないため「{parent}」に寄せた", key
 
-    return None, "e-Statに該当する町丁目がない", key
+    return None, hazure("e-Statに該当する町丁目がない", "unresolved"), key
 
 
 def load_boundary(city_code):

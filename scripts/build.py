@@ -125,6 +125,9 @@ def build_city(city_code):
     stats = {y: defaultdict(lambda: {"teguchi": Counter(), "hour": Counter()})
              for y in years}
     report = {y: {"rows": 0, "unmatched": 0} for y in years}
+    # 突合できなかった行を箱ごとに数える（共通仕様6節 `not_counted`）。
+    # **4つとも0で始める。** 出てこなかった箱を落とさないため。
+    hako = {h: 0 for h in police.HAKO}
 
     for year in config.YEARS:
         y = str(year)
@@ -134,6 +137,7 @@ def build_city(city_code):
             area, reason, _ = police.match(r, bd)
             if area is None:
                 report[y]["unmatched"] += 1
+                hako[reason.hako] += 1
                 continue
             s = stats[y][area["key"]]
             s["teguchi"][r[config.COLS["teguchi"]]] += 1
@@ -250,7 +254,8 @@ def build_city(city_code):
     print(f"    升 {total:,}  1-2で伏せた {small:,}  補完的に伏せた {withheld:,}"
           f"（{(small + withheld) / total * 100:.1f}%）")
     # city_teguchi は geojson には入れない。市の升を作るためだけに呼び出し元へ渡す。
-    return fc, {"city": c["name"], "rows": rows, "unmatched": un}, city_teguchi
+    return fc, {"city": c["name"], "rows": rows, "unmatched": un,
+                "hako": hako}, city_teguchi
 
 
 def write_suppress_report(fcs, city_teguchi):
@@ -337,7 +342,7 @@ def write_suppress_report(fcs, city_teguchi):
     print(f"伏せた理由の記録  data/build/suppress-report.md（公開しない）")
 
 
-def cross_site_index(fcs, city_teguchi):
+def cross_site_index(fcs, city_teguchi, match):
     """横断用の index.json（共通仕様6節）をサイトルートに出す。
 
     個票は「町丁目 × 層 × 期間」。**合計の升は作らない。**
@@ -426,6 +431,14 @@ def cross_site_index(fcs, city_teguchi):
         "spec": config.SPEC_URL,
         "records": records,
         "counts_by_city": counts,
+        # 数えなかったもの（共通仕様6節）。**4つとも出す。0でも出す。**
+        # 欠けている鍵は0ではない。3つしか出さないサイトがあると、
+        # 横断で読む側は「0」と「このサイトは数えていない」を見分けられない。
+        #
+        # 市ごとには出さない。市×層の親になり、伏せた升の引き算に使える
+        # （`docs/突合率.md` が行数そのものを書かないのと同じ理由）。
+        "not_counted": {h: sum(m["hako"].get(h, 0) for m in match)
+                        for h in police.HAKO},
     }
 
 
@@ -470,7 +483,7 @@ def main():
     (config.ROOT / "docs" / "突合率.md").write_text("\n".join(lines), encoding="utf-8")
 
     # 横断用（共通仕様6節）
-    idx = cross_site_index(fcs, totals)
+    idx = cross_site_index(fcs, totals, match)
     out = config.ROOT / "index.json"
     out.write_text(json.dumps(idx, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"\nindex.json（横断用）  {out.stat().st_size:,} バイト  "

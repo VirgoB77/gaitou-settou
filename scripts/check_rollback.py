@@ -33,6 +33,8 @@ CI が定期実行で生成物を作り直して公開側に commit する。金
   ・件数の釣り合いは**落とさない**。正当な作り直しでも件数は増えるため、
     落とすと狼少年になる。目を向けさせるだけ
   ・公開側に出るかどうかは**範囲だけ**。出ると分かっても、中身は見ない
+  ・日本語名のファイルは、`-z` を外すと黙って全部落ちる。
+    **落ちたことが件数にしか出ない**ので、名前を見ても気づけない
 
 日付が動いていなければ通る。**「通った＝中身も新しい」ではない。**
 """
@@ -100,9 +102,16 @@ def _stamps(text):
 
 
 def staged():
-    r = subprocess.run(["git", "diff", "--cached", "--name-only"],
+    """stage されているパス。
+
+    **`-z` を付ける。** 付けないと git が非ASCIIのパスを引用符で包み、
+    `"docs/\346\261\272..."` という別の文字列になる。
+    そうなると、公開対象かの照合も `git show` も静かに外れる
+    （2026-09-19。`docs/突合率.md` を「公開側に出ない」と報告していた）。
+    """
+    r = subprocess.run(["git", "diff", "--cached", "--name-only", "-z"],
                        capture_output=True, text=True, check=True)
-    return [p for p in r.stdout.splitlines() if p]
+    return [p for p in r.stdout.split("\0") if p]
 
 
 def main():

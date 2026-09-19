@@ -210,6 +210,56 @@ class TestGrainMismatch(unittest.TestCase):
                          "町丁目と市が同じ粒度の升を持っている。引き算の相手になる")
 
 
+class TestNotCounted(unittest.TestCase):
+    """数えなかったものの出し方（共通仕様6節 `not_counted`）。
+
+    **4つとも出す。0でも出す。** 欠けている鍵は0ではない。
+    3つしか出さないサイトがあると、横断で読む側は「0」と
+    「このサイトは数えていない」を見分けられない。
+
+    **そして、市・層・手口・年のどれにも割らない。**
+    割ると `true(市,層) − unmatched(市,層) = 出している升の合計` が成り立ち、
+    伏せた升の親になる（`docs/突合率.md` が行数そのものを書かないのと同じ理由）。
+    理由ごとの全体合計だけなら、どの粒度にも割り当てられない。
+
+    **捕まえないもの。**
+      ・箱の割り当てが正しいか。合計しか見ていない。
+        「町丁目が空欄」を undecided に入れても、ここは通る
+      ・`check_small_counts` はここを見ていない。`text_parents` は
+        `.json` を読まない。**だから粒度の番はここが持つ**
+    """
+
+    HAKO = ("unresolved", "unobserved", "undecided", "gone")
+
+    def setUp(self):
+        self.nc = load().get("not_counted")
+
+    def test_all_four_keys_present(self):
+        self.assertEqual(sorted(self.nc or {}), sorted(self.HAKO),
+                         "\n  4つとも出すこと。0でも出す。欠けている鍵は0ではない")
+
+    def test_flat_not_split_by_any_grain(self):
+        """入れ子にしない。割った瞬間に伏せた升の親になる。"""
+        fukai = {k: v for k, v in (self.nc or {}).items()
+                 if not isinstance(v, int) or isinstance(v, bool)}
+        self.assertEqual(fukai, {},
+                         "\n  not_counted を市・層・手口・年に割らない。"
+                         "割ると true − unmatched が出している升の合計になり、"
+                         "伏せた升の親になる")
+
+    def test_sum_matches_unmatched_rows(self):
+        """合計が、突合できなかった行数と合うこと。行を落としていないか。"""
+        import csv
+        un = config.BUILD / "unmatched.csv"
+        if not un.exists():
+            raise unittest.SkipTest(
+                "unmatched.csv が無い（公開用の木。金庫にだけ置く）。合計は照合していない")
+        n = sum(1 for _ in csv.DictReader(un.open(encoding="utf-8-sig")))
+        self.assertEqual(sum(self.nc.values()), n,
+                         f"\n  箱の合計と unmatched.csv の行数が違う。"
+                         f"どこかの行が箱に入っていない（行数 {n:,}）")
+
+
 class TestCountsAgree(unittest.TestCase):
     """数が互いに合っているか（共通仕様9節）。
 
