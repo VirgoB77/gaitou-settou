@@ -5,6 +5,7 @@ privacy.py を迂回した値が1件でもあれば落ちる。
 """
 
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -207,6 +208,54 @@ class TestGrainMismatch(unittest.TestCase):
         city = {m["period"] for m in self.d["counts_by_city"]}
         self.assertFalse(town & city,
                          "町丁目と市が同じ粒度の升を持っている。引き算の相手になる")
+
+
+class TestCountsAgree(unittest.TestCase):
+    """数が互いに合っているか（共通仕様9節）。
+
+    **走らせる前に、何が出たら異常かを決めておく。**
+    決めていないと、画面に出ていても読み飛ばす。
+    850ファイルの `M` は目の前にあったが、「コードしか触っていないのに」と
+    思わなければ素通りしていた（2026-09-19）。
+
+    期待値は**互いから導く。** 固定の数を書くと、市を足すたびに古びて、
+    古びた検査は直され方が「期待値のほうを書き換える」になる。
+
+    **捕まえないもの。**
+      ・中身。数が合っていても、中身が入れ替わっていれば通る
+      ・区画の数そのものが減ったとき。両方が同時に減れば釣り合う
+    """
+
+    def setUp(self):
+        self.d = load()
+        bi = json.loads((config.BUILD / "index.json").read_text(encoding="utf-8"))
+        self.areas = sum(c["areas"] for c in bi["cities"])
+
+    def test_records_is_areas_times_layers(self):
+        self.assertEqual(len(self.d["records"]),
+                         self.areas * len(config.TOWN_LAYERS))
+
+    def test_cho_pages_is_areas_plus_list(self):
+        pages = list((ROOT / "cho").glob("*.html"))
+        if not pages:
+            raise unittest.SkipTest("cho/ がまだ無い")
+        self.assertEqual(len(pages), self.areas + 1)
+
+    def test_sitemap_is_areas_plus_three(self):
+        sm = ROOT / "sitemap.xml"
+        if not sm.exists():
+            raise unittest.SkipTest("sitemap.xml がまだ無い")
+        locs = re.findall(r"<loc>", sm.read_text(encoding="utf-8"))
+        # 町丁目 + トップ + policy + 一覧
+        self.assertEqual(len(locs), self.areas + 3)
+
+    def test_every_record_points_at_a_real_page(self):
+        """url が実在するページを指していること。リンク切れを数で見ない。"""
+        if not any((ROOT / "cho").glob("*.html")):
+            raise unittest.SkipTest("cho/ がまだ無い")
+        missing = [r["url"] for r in self.d["records"]
+                   if not (ROOT / "cho" / (r["url"].rsplit("/", 1)[1])).exists()]
+        self.assertEqual(missing[:3], [])
 
 
 if __name__ == "__main__":
