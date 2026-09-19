@@ -11,7 +11,7 @@ CI が定期実行で生成物を作り直して公開側に commit する。金
 
 見るものは3つ。
 
-  1. 生成日が戻っていないか（これが本体）
+  1. 生成日が戻っていないか（これが本体）。**名前で選ばず、中身の印で拾う**
   2. コードと生成物の件数の釣り合い（気づく入口）
      コードしか触っていないのに生成物が何百件も stage されていたら、
      動いているのは中身ではなく日付。
@@ -27,6 +27,8 @@ CI が定期実行で生成物を作り直して公開側に commit する。金
 **捕まえないもの。**
 
   ・生成日が同じまま、中身だけ古いもの。日付しか見ていない
+  ・JSON 以外の生成物。`cho/*.html` は日付を持っているが、ここでは読んでいない
+  ・印を1つも持たない生成物（`robots.txt`・`style.css`）。見る手がかりが無い
   ・CI が作っていない生成物（手で置いたもの）
   ・件数の釣り合いは**落とさない**。正当な作り直しでも件数は増えるため、
     落とすと狼少年になる。目を向けさせるだけ
@@ -45,10 +47,21 @@ import tracked
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-# 生成物。CI が書き戻す側。
+# 生成物。CI が書き戻す側。**ここは名前の一覧のまま。**
+# 使い道は件数の釣り合い（落とさない気づきの入口）なので、
+# 1つ漏れても hint が弱まるだけで、通してはいけないものを通さない。
 BUILT = ("cho/", "data/build/", "index.json", "sitemap.xml", "robots.txt")
-# 生成日を持つファイル。ここが戻ったら巻き戻し。
-DATED = ("data/build/index.json", "index.json")
+
+# 日付印の名前。**ファイルの名前ではなく、中身が持っている印のほう。**
+#
+# 前は日付を持つ「ファイル名」を並べていた（index.json と data/build/index.json）。
+# **名前で並べた見張りは、名前を増やした日に黙る**（共通仕様4節）。
+# 市を1つ足すと geojson が1枚増える。その中の巻き戻しを素通りしていた。
+# 壊して確かめた（2026-09-19）。
+#
+# いまは stage された中身を読んで、印を持っているものを全部見る。
+# 市を足しても府県を足しても、書き足すことは無い。
+STAMPS = ("generated_at", "fetched_on")
 
 
 def _show(ref, path):
@@ -57,13 +70,33 @@ def _show(ref, path):
     return r.stdout if r.returncode == 0 else None
 
 
-def _generated_at(text):
+def _stamps(text):
+    """中身が持っている日付印を全部返す。{印の名前: 日付}。
+
+    JSON の入れ子のどこにあってもよい。geojson は properties の下に持つ。
+    **捕まえないもの。** JSON でないもの（html・xml・csv）。
+    生成物の日付はいまのところ JSON 側にしかない。
+    """
     if not text:
-        return None
+        return {}
     try:
-        return json.loads(text).get("generated_at")
-    except (json.JSONDecodeError, AttributeError):
-        return None
+        d = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    out = {}
+
+    def aruku(o, michi=""):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k in STAMPS and isinstance(v, str):
+                    out[f"{michi}{k}"] = v
+                else:
+                    aruku(v, f"{michi}{k}.")
+        elif isinstance(o, list):
+            for v in o[:1]:          # 配列は先頭だけ。record 1,698 件を歩かない
+                aruku(v, michi)
+    aruku(d)
+    return out
 
 
 def staged():
@@ -92,15 +125,25 @@ def main():
         print(f"   公開側に出るものはありません。金庫だけの変更（{how}）")
 
     bad = []
-    for path in DATED:
-        if path not in files:
+    # **名前で選ばない。** stage された JSON を開いて、印を持っていたら見る。
+    mita = 0
+    for path in files:
+        if not path.endswith((".json", ".geojson")):
             continue
-        old = _generated_at(_show("HEAD", path))
-        new = _generated_at(_show("", path))     # "" は index（stage 済みの中身）
-        if old and new and new < old:
-            bad.append(f"{path} の生成日が {old} → {new} に戻っている")
-        elif old and new:
-            print(f"   {path}  生成日 {old} → {new}")
+        furui = _stamps(_show("HEAD", path))
+        atarashii = _stamps(_show("", path))     # "" は index（stage 済みの中身）
+        if not furui or not atarashii:
+            continue
+        mita += 1
+        for k, o in furui.items():
+            n = atarashii.get(k)
+            if not n:
+                continue
+            if n < o:
+                bad.append(f"{path} の {k} が {o} → {n} に戻っている")
+            elif n != o:
+                print(f"   {path}  {k} {o} → {n}")
+    print(f"   日付印を見たファイル {mita} 件（名前ではなく中身で拾った）")
 
     # 気づく入口。落としはしないが、目を向けさせる。
     if built and not code:
