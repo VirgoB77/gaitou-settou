@@ -12,7 +12,7 @@
   :root{
     --base:#FAFAF8; --ink:#1F2421; --rule:#D8DAD5; --sub:#5A615B; --panel:#FFFFFF;
     --q1:#E6F2EE; --q2:#A8D9C7; --q3:#5FBBA0; --q4:#2A9179; --q5:#146455;
-    --none:#ECEDEA;
+    --none:#ECEDEA; --nopop:#D8DAD5;
   }
   *{box-sizing:border-box}
   html{-webkit-text-size-adjust:100%}
@@ -66,6 +66,7 @@
   .legend .na{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--sub); margin:6px 0 0}
   .legend .na i{width:14px; height:12px; flex:none; border:1px solid var(--rule)}
   .legend .na i.sw-none{background:var(--none)}
+  .legend .na i.sw-nopop{background:var(--nopop)}
   .legend .na i.sw-hatch{
     background:
       repeating-linear-gradient(45deg, #9AA39C 0 1.6px, #FFFFFF 1.6px 5.6px);
@@ -167,7 +168,8 @@
     <div class="bar" id="legend-bar" aria-hidden="true"></div>
     <p class="na"><i class="sw-hatch"></i><span id="legend-hatch">1〜2件の町丁目（実数を出していません）</span></p>
     <p class="na" id="legend-wh-row"><i class="sw-wh"></i><span id="legend-wh">ほかの町丁目を守るため、実数を出していない町丁目</span></p>
-    <p class="na" id="legend-none-row"><i class="sw-none"></i><span id="legend-none">人口500人未満、または1〜2件のため、人口千人あたりの値を出していない町丁目</span></p>
+    <p class="na" id="legend-none-row"><i class="sw-none"></i><span id="legend-none">人口500人未満、または1〜2件のため、人口千人あたりの値を<b>伏せている</b>町丁目</span></p>
+    <p class="na" id="legend-nopop-row"><i class="sw-nopop"></i><span>人口が0のため、人口千人あたりの値を<b>出せない</b>町丁目（住んでいる人がいない区画）</span></p>
   </div>
 
   <div id="map" role="application" aria-label="町丁目の地図"></div>
@@ -228,6 +230,7 @@
 <script>
 const SHADES = ["#E6F2EE", "#A8D9C7", "#5FBBA0", "#2A9179", "#146455"];
 const NONE = "#ECEDEA";
+const NOPOP = "#D8DAD5";
 
 let fc = null;
 let mode = "total";
@@ -335,7 +338,9 @@ function fillColor() {
   const field = mode === "total" ? "v" : "r";
   const expr = ["step", ["coalesce", ["get", field], -1], SHADES[0]];
   breaks().forEach((v, i) => expr.push(v, SHADES[i + 1]));
-  return mode === "rate" ? ["case", ["get", "rna"], NONE, expr] : expr;
+  return mode === "rate"
+    ? ["case", ["get", "rnp"], NOPOP, ["get", "rna"], NONE, expr]
+    : expr;
 }
 
 function drawLegend() {
@@ -366,6 +371,7 @@ function drawLegend() {
   $("legend-wh").textContent =
     "実数を出していない町丁目（ほかの町丁目を守るため、まとめて伏せています）";
   $("legend-none-row").style.display = isTotal ? "none" : "";
+  $("legend-nopop-row").style.display = isTotal ? "none" : "";
   $("legend-none").textContent =
     "人口" + fmt(fc.properties.min_population) + "人未満、または0件のため、"
     + "人口千人あたりの値を出していない町丁目";
@@ -378,7 +384,11 @@ function recompute() {
     p.wh = p.w[layer] === true;               // 補完的伏せ → 点
     p.s = p.v === null && !p.wh;              // 1〜2件 → 斜線
     p.r = ratePer1k(p.v, p.jinko);
-    p.rna = !p.s && !p.wh && p.r === null;    // 率を出していない → グレー
+    // 率が無い理由は2つ。**別の状態にする**（共通仕様3.2）。
+    //   rnp … 人口0。率そのものが出せない
+    //   rna … 出せるが伏せた（人口500人未満、または1〜2件）
+    p.rnp = !p.jinko;
+    p.rna = !p.s && !p.wh && p.r === null && !p.rnp;
   }
   const src = map.getSource("cho");
   if (src) src.setData(fc);
@@ -426,8 +436,10 @@ function showArea(p) {
   // 「人口または件数が小さい」は当てはまらない。
   const rateNote = wh
     ? '<p class="sub">ほかの町丁目を守るため、この町丁目の数字は出していません</p>'
+    : r === null && !p.jinko
+    ? '<p class="sub">住んでいる人がいないため、人口千人あたりの値は出せません</p>'
     : r === null
-    ? '<p class="sub">人口または件数が小さいため出していません</p>'
+    ? '<p class="sub">人口または件数が小さいため、人口千人あたりの値は伏せています</p>'
     : '<p class="sub num">' + P.city + '全体 ' + (avg === null ? "—" : avg) + '件</p>';
 
   $("panel").innerHTML =

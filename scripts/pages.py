@@ -168,6 +168,17 @@ def shown_total(values):
     return (f"{n:,}", "件") if not hidden else (f"{n:,}", "件以上")
 
 
+def rate_cell(r, population, count):
+    """率の欄。**出せないのと、伏せたのを、別の言葉で書く**（共通仕様3.2）。
+
+    「—」を両方に使うと、人口0の町丁目と1〜2件で伏せた町丁目が同じに見える。
+    """
+    if r is not None:
+        return f"{r:.2f}"
+    reason = privacy.rate_reason(count if count is not None else 1, population)
+    return "人口0" if reason == privacy.NO_POPULATION else "—"
+
+
 def build_city(fc, updated):
     P = fc["properties"]
     city = P["city"]
@@ -190,7 +201,7 @@ def build_city(fc, updated):
             avg = P["city_rate"][i]
             rates.append(
                 f'<tr><th scope="row">{html.escape(layer["name"])}</th>'
-                f'<td class="v num">{"—" if r is None else f"{r:.2f}"}</td>'
+                f'<td class="v num">{rate_cell(r, p["jinko"], v)}</td>'
                 f'<td class="v num">{"—" if avg is None else avg}</td></tr>')
 
         nb = []

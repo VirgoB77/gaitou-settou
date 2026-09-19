@@ -186,6 +186,24 @@ def bucket_count(n):
     return str(n)
 
 
+# 率を出さない理由は2つあり、**別のものとして扱う**（共通仕様3.2）。
+#
+#   出せない … 人口0。率そのものが定義できない（0では割れない）
+#   伏せた   … 出せるが、出すと率×人口で件数が戻る
+#
+# 画面で同じ灰色・同じ「—」にすると、読者に区別がつかない。
+SHOWN_RATE, NO_POPULATION, SUPPRESSED_RATE = "shown", "no_population", "suppressed"
+
+
+def rate_reason(count, population):
+    """率をどう扱うか。3つのどれか。**順番がそのまま意味になる。**"""
+    if not population:
+        return NO_POPULATION
+    if suppress_rate(count, population):
+        return SUPPRESSED_RATE
+    return SHOWN_RATE
+
+
 def rate_per_1k(count, population):
     """人口千人あたりの件数。伏せるべきときは None。"""
     if not population or suppress_rate(count, population):
