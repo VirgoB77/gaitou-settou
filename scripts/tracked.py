@@ -22,6 +22,8 @@
 
   ・追跡されていて、かつ除外リストにも無いもの。**それは公開される。**
     ここは「公開する範囲」を決めるだけで、その中身は見ない
+  ・除外の中の例外を足し忘れたとき。`KEEP_FROM_DOCS` は見ているが、
+    別の形の例外が増えたら、また公開されるのに見ないファイルができる
   ・除外リストへの足し忘れ。黙って公開側に入る
     （種類で捕まえる見張りが `make_public_tree.leaked_kinds` にある）
   ・git の追跡情報が取れない場所では、1つめの条件が効かない。
@@ -50,12 +52,26 @@ def _tracked():
 
 
 def _excluded():
-    """公開しないと決めたもの（make_public_tree の除外リスト）。"""
+    """公開しないと決めたもの。(除外, 除外の中の例外, 一覧が取れたか) を返す。
+
+    **例外を忘れると、公開されるのに誰も見ていないファイルができる。**
+    `EXCLUDE` は `docs` を丸ごと落とすが、`KEEP_FROM_DOCS` の1枚だけは
+    公開用の木に残り、月次の許可リストにも入っている。
+    落としたままにすると、その1枚を文言の検査が一度も見ない
+    （2026-09-19 に実測。`docs/突合率.md` がその状態だった）。
+
+    **一覧が取れなかったことを黙らない。** 公開用の木の中では
+    `make_public_tree.py` 自身が公開されないので import が落ちる。
+    そこでは全部見るのが正しい（木にあるもの＝公開されるもの）が、
+    金庫で同じことが起きたら誤検出だらけになる。どちらか呼ぶ側に返す。
+    """
     try:
         import make_public_tree
     except ImportError:
-        return ()
-    return tuple(path for path, _ in make_public_tree.EXCLUDE)
+        return (), (), False
+    return (tuple(path for path, _ in make_public_tree.EXCLUDE),
+            tuple(f"docs/{n}" for n in make_public_tree.KEEP_FROM_DOCS),
+            True)
 
 
 def _under(rel, paths):
@@ -72,8 +88,10 @@ def published(suffixes=None):
                 for p in config.ROOT.rglob("*") if p.is_file()]
         rels = [r for r in rels if not any(r.startswith(d) or f"/{d}" in r
                                            for d in FALLBACK_DENY)]
-    skip = _excluded()
-    out = [r for r in rels if not _under(r, skip)]
+    skip, keep, aru = _excluded()
+    if not aru:
+        how += "・除外リストは読めなかった（木の中とみて全部見る）"
+    out = [r for r in rels if r in keep or not _under(r, skip)]
     if suffixes:
         out = [r for r in out if Path(r).suffix in suffixes]
     return sorted(out), how
