@@ -5,6 +5,7 @@
 """
 
 import sys
+import math
 import unittest
 from pathlib import Path
 
@@ -92,6 +93,32 @@ class TestPrivacy(unittest.TestCase):
     def test_suppress_rate_population(self):
         self.assertTrue(privacy.suppress_rate(10, 499))
         self.assertFalse(privacy.suppress_rate(10, 500))
+
+    def test_suppress_rate_zero_is_never_suppressed(self):
+        """**0件は、人口がいくら小さくても伏せない。**
+
+        率を伏せるのは「率 × 人口」で件数が戻るから。0件には戻る先が無い。
+        伏せると、0件が率の地図で灰色に落ちて「0件はいちばん薄い階級の色」と
+        食い違う（共通仕様3.2）。
+
+        2026-09-19：docstring には「0件は伏せない」と書いてあったのに、
+        人口を先に見ていたので 0件×小人口 が伏せられていた。
+        **検査がその組み合わせを一度も当てていなかった。**
+        実装と検査が同じ向きにずれると、通ったまま何年でも残る。
+        """
+        for pop in (1, 100, 499, 500, 5000):
+            self.assertFalse(privacy.suppress_rate(0, pop), f"人口{pop}")
+
+    def test_zero_population_has_no_rate(self):
+        """人口0は、伏せる以前に率が定義できない（0では割れない）。
+
+        2026-09-19：0件を先に見る直しを入れたら、人口0の町丁目47件で
+        ゼロ除算になった。**直しが新しい不具合を作った。**
+        順番は3段（人口0 → 0件 → 小人口・1〜2件）。
+        """
+        self.assertTrue(privacy.suppress_rate(0, 0))
+        self.assertIsNone(privacy.rate_per_1k(0, 0))
+        self.assertIsNone(privacy.rate_for(0, 0))
 
     def test_suppress_rate_count(self):
         self.assertTrue(privacy.suppress_rate(2, 5000))
@@ -260,6 +287,36 @@ class TestPartyKindDisclosed(unittest.TestCase):
 
     def test_corp_is_corp(self):
         self.assertEqual(privacy.party_kind("株式会社テスト"), "corp")
+
+
+class TestOnlyOneWayIsRejected(unittest.TestCase):
+    """当てる組合せが1通りのまとまりは落とす（共通仕様3.2）。
+
+    2026-09-19：失敗条件を `k < 2 or m <= 0 or m >= k` から
+    `C(k, m) == 1` に書き換えた。**同値であることは確かめたが、
+    テストが無かった。** 書き換えの根拠が手元の確認だけだと、
+    次に誰かが片方を動かしたときに黙って別の規則になる。
+
+    ここで両方を突き合わせる。どちらを直しても、ずれたら落ちる。
+    """
+
+    def test_old_and_new_conditions_agree(self):
+        """遠回りな書き方と、正本の言葉が、同じものを指していること。"""
+        for k in range(1, 40):
+            for m in range(0, k + 1):
+                old = (k < 2 or m <= 0 or m >= k)
+                new = (math.comb(k, m) == 1)
+                self.assertEqual(old, new, f"k={k} m={m}")
+
+    def test_one_way_means_every_cell_is_determined(self):
+        """組合せが1通りなら、伏せた升はすべて決まる。"""
+        for k, m in ((1, 0), (1, 1), (5, 0), (5, 5), (106, 0), (106, 106)):
+            self.assertEqual(math.comb(k, m), 1, f"k={k} m={m}")
+
+    def test_margin_keeps_more_than_one_way(self):
+        """余裕があるまとまりは、1通りに決まらないこと。"""
+        for k, m in ((22, 11), (36, 19), (38, 17), (106, 53)):
+            self.assertGreater(math.comb(k, m), 1, f"k={k} m={m}")
 
 
 if __name__ == "__main__":

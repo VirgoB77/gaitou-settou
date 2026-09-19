@@ -160,6 +160,17 @@ def suppress_rate(count, population):
     落ちて、3.2 の「0件はいちばん薄い階級の色」と食い違う。
     （2026-09-17 に正本が直った。前は「件数2件以下」だった）
     """
+    # 条件を並べるときは、どちらを先に見るかも書く（共通仕様3.2）。順番は3段。
+    #
+    #   1. 人口0 … **率そのものが定義できない**（0では割れない）。伏せる以前の話。
+    #              0件を先に見ると、ここでゼロ除算になる（2026-09-19 に踏んだ）
+    #   2. 0件   … 伏せない。人口の小ささが効くのは「率×人口で件数が戻る」ため。
+    #              0件には戻る先が無い。何を掛けても0
+    #   3. 小人口・1〜2件 … 伏せる
+    if population <= 0:
+        return True
+    if count == 0:
+        return False
     if population < MIN_POPULATION:
         return True
     return 1 <= count <= MAX_SUPPRESS_COUNT
@@ -177,7 +188,7 @@ def bucket_count(n):
 
 def rate_per_1k(count, population):
     """人口千人あたりの件数。伏せるべきときは None。"""
-    if suppress_rate(count, population):
+    if not population or suppress_rate(count, population):
         return None
     return round(count / population * 1000, 2)
 

@@ -23,6 +23,7 @@
 """
 
 import json
+import math
 import re
 import sys
 from collections import defaultdict
@@ -170,6 +171,10 @@ def group_margin(fcs, idx):
                         if f["properties"]["n"][i] is not None)
             m_ = (S - shown) - k          # 伏せた升のうち2件のものの数
             margin = min(m_, k - m_)
+            # 当てる組合せの数。**これが1なら、どの升も決まる。**
+            # 共通仕様3.2「当てる組合せが1通りしかないまとまりは、親を出さない。
+            # 例外なし」。余裕0・m=k・k=1 はすべてこれに当たる（同値を確かめた）。
+            ways = math.comb(k, m_) if 0 <= m_ <= k else 0
             note = f"余裕 {margin}"
             # 余裕が0かどうかだけ見ると、崖の縁に立つまで鳴らない。
             # 余裕が k に対して細ってくると、1升ずつの「2件らしさ」が
@@ -178,9 +183,9 @@ def group_margin(fcs, idx):
             if k >= 2 and 0 < m_ < k and margin < k * THIN:
                 note += f"（細い／k の {margin / k:.0%}）"
                 thin.append((P["city"], layer["name"], k, m_, margin))
-            row = (P["city"], layer["name"], S, k, m_, note)
+            row = (P["city"], layer["name"], S, k, m_, f"{note}／{ways:,} 通り")
             rows.append(row)
-            if k < 2 or m_ <= 0 or m_ >= k:
+            if ways <= 1:
                 bad.append(row)
     return rows, bad, thin
 
