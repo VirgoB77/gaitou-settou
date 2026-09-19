@@ -36,8 +36,12 @@ NG = [
 # そのまま配るので、.md も .py も画面と同じく人が読める。
 TARGET_SUFFIX = {".html", ".css", ".xml", ".md", ".py", ".yml"}
 
-# 自分自身は見ない。NG語を文字列として持っているので必ず当たる。
-SELF = {"check_copy.py"}
+# 語彙を**データとして**持っているファイルは見ない。必ず当たるため。
+# check_headings.py も同じ（「何に使えるか」の言い回しを一覧で持つ）。
+#
+# **ここに足すのは、語彙表そのものを持つファイルだけ。**
+# 「たまたま当たるから外す」を始めると、外した先が見えなくなる。
+SELF = {"check_copy.py", "check_headings.py"}
 
 
 def _under(rel, paths):

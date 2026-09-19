@@ -100,7 +100,8 @@ jobs:
           ng=0
           for c in "-m unittest discover -s tests" \
                    "scripts/check_small_counts.py" \
-                   "scripts/check_copy.py"; do
+                   "scripts/check_copy.py" \\
+                   "scripts/check_headings.py"; do
             echo "::group::$c"
             python $c || { echo "★ 落ちた: $c"; ng=1; }
             echo "::endgroup::"
@@ -149,7 +150,8 @@ jobs:
           ng=0
           for c in "-m unittest discover -s tests" \
                    "scripts/check_small_counts.py" \
-                   "scripts/check_copy.py"; do
+                   "scripts/check_copy.py" \\
+                   "scripts/check_headings.py"; do
             echo "::group::$c"
             python $c || { echo "★ 落ちた: $c"; ng=1; }
             echo "::endgroup::"
