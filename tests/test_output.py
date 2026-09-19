@@ -221,9 +221,15 @@ class TestCountsAgree(unittest.TestCase):
     期待値は**互いから導く。** 固定の数を書くと、市を足すたびに古びて、
     古びた検査は直され方が「期待値のほうを書き換える」になる。
 
+    **3本は区画数を共有している。** だから `index.json` の `areas` が
+    1つ狂うと**3本同時に鳴る。** 原因は3つではなく1つ。
+    鳴った本数を、見つかった不具合の数として読まないこと（共通仕様9節
+    「鳴った理由が、鳴らしたかった理由と同じか」）。
+
     **捕まえないもの。**
       ・中身。数が合っていても、中身が入れ替わっていれば通る
       ・区画の数そのものが減ったとき。両方が同時に減れば釣り合う
+      ・`areas` 自身。ここでは期待値の出どころなので、真偽は問えない
     """
 
     def setUp(self):
@@ -231,23 +237,42 @@ class TestCountsAgree(unittest.TestCase):
         bi = json.loads((config.BUILD / "index.json").read_text(encoding="utf-8"))
         self.areas = sum(c["areas"] for c in bi["cities"])
 
+    def _msg(self, nani, doko, shiki, mita, hazu):
+        """鳴ったとき、**どちらが真か**と**出どころ**を必ず書く。
+
+        既定の文面は `1698 != 1700` で、どちらが実測でどちらが期待値か
+        書いていない。3本同時に鳴くときは、なおさら読めない。
+        """
+        return (f"\n  {nani}：実測 {mita:,}（{doko}）"
+                f"\n  期待 {hazu:,}＝{shiki}"
+                f"\n  期待値の出どころは index.json の areas={self.areas:,}。"
+                f"ここが狂うと、ほかの数の検査も一緒に鳴く")
+
     def test_records_is_areas_times_layers(self):
-        self.assertEqual(len(self.d["records"]),
-                         self.areas * len(config.TOWN_LAYERS))
+        want = self.areas * len(config.TOWN_LAYERS)
+        got = len(self.d["records"])
+        self.assertEqual(got, want, self._msg(
+            "records の数", "index.json",
+            f"区画 {self.areas:,} × 層 {len(config.TOWN_LAYERS)}", got, want))
 
     def test_cho_pages_is_areas_plus_list(self):
         pages = list((ROOT / "cho").glob("*.html"))
         if not pages:
             raise unittest.SkipTest("cho/ がまだ無い")
-        self.assertEqual(len(pages), self.areas + 1)
+        want = self.areas + 1
+        self.assertEqual(len(pages), want, self._msg(
+            "cho/*.html の枚数", "cho/ を数えた",
+            f"区画 {self.areas:,} + 一覧ページ 1", len(pages), want))
 
     def test_sitemap_is_areas_plus_three(self):
         sm = ROOT / "sitemap.xml"
         if not sm.exists():
             raise unittest.SkipTest("sitemap.xml がまだ無い")
         locs = re.findall(r"<loc>", sm.read_text(encoding="utf-8"))
-        # 町丁目 + トップ + policy + 一覧
-        self.assertEqual(len(locs), self.areas + 3)
+        want = self.areas + 3
+        self.assertEqual(len(locs), want, self._msg(
+            "sitemap の <loc> の数", "sitemap.xml",
+            f"区画 {self.areas:,} + トップ・policy・一覧 3", len(locs), want))
 
     def test_every_record_points_at_a_real_page(self):
         """url が実在するページを指していること。リンク切れを数で見ない。"""
