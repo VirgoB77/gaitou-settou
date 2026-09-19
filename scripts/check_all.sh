@@ -18,7 +18,8 @@ GROUP=${GROUP:-}          # GitHub Actions のときだけ ::group:: を出す
 checks="-m|unittest|discover|-s|tests
 scripts/check_small_counts.py
 scripts/check_copy.py
-scripts/check_headings.py"
+scripts/check_headings.py
+scripts/check_nanori.py"
 
 ng=0
 echo "$checks" | while IFS= read -r line; do

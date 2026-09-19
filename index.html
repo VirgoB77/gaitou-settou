@@ -214,7 +214,9 @@
       運営者　鯨屋（くじらや）<br>
       　　　　大阪府・兵庫県で行政が公開する一次情報を、消える前に記録しています。<br>
       連絡先　<a href="https://forms.gle/pp93tSJ5p8SAMEMk8">訂正・削除の申し出フォーム</a>（7日以内にご返信します）<br>
-      最終更新　<span id="updated">—</span>／更新頻度　年1回
+      対象期間　<span id="period">—</span>年の認知件数<br>
+      このページを作り直した日　<span id="built-on">—</span>（数字が変わったとは限りません）／
+      取り込みは年1回、前年分が公開されたときです
     </div>
 
     <p style="margin-top:12px">
@@ -585,7 +587,10 @@ $("q").addEventListener("change", () => {
 
 (async function start() {
   const index = await (await fetch("data/build/index.json")).json();
-  $("updated").textContent = index.generated_at;
+  // generated_at は**作った日**。データが変わった日ではない。
+  // 名前のまま「最終更新」に入れていた。実測で 850/850 外れていた
+  $("built-on").textContent = index.generated_at;
+  $("period").textContent = index.period;
   const cSel = $("city");
   index.cities.forEach((c) => {
     const o = document.createElement("option");

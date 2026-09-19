@@ -21,8 +21,16 @@ OUT = SRC / "cho"
 SITE = config.SITE_URL
 
 
-def notes(updated, up="../", any_withheld=False):
+def notes(built_on, period, up="../", any_withheld=False):
     """各ページに必ず置くもの（共通仕様8節）。たたんで隠さない。
+
+    built_on … **このページを作り直した日。データが変わった日ではない。**
+    period   … データ自身の時点（対象年）。こちらだけが読者の知りたい事実。
+
+    前は `updated` という名前で受けて「最終更新」と書いていた。
+    引数の名前そのものが、外れる名乗りだった（共通仕様3.5）。
+    実測すると、CI が触った 850 ページのうち **850 ページが日付の行だけの差**で、
+    中身は1件も変わっていなかった。名乗りは 100% 外れていた（2026-09-19）。
 
     any_withheld … 補完的に伏せた升（札が「非公開」）が実在するか。
     実在しないのに説明だけ出すと、読者が一度も出会わない札の読み方を
@@ -82,7 +90,9 @@ def notes(updated, up="../", any_withheld=False):
 運営者　{config.OPERATOR}<br>
 　　　　{config.OPERATOR_DESC}<br>
 連絡先　<a href="{config.CONTACT_FORM}">訂正・削除の申し出フォーム</a>（{config.CONTACT_NOTE}）<br>
-最終更新　{updated}／更新頻度　年1回
+対象期間　{period}年の認知件数<br>
+このページを作り直した日　{built_on}（数字が変わったとは限りません）／
+取り込みは年1回、前年分が公開されたときです
 </div>
 
 <p><a href="{up}policy.html">このサイトに載せているもの・載せていないもの</a>　／
@@ -179,13 +189,13 @@ def rate_cell(r, population, count):
     return "人口0" if reason == privacy.NO_POPULATION else "—"
 
 
-def build_city(fc, updated):
+def build_city(fc, built_on):
     P = fc["properties"]
     city = P["city"]
     period = P["period"].replace("-", "〜") + "年"
     by_code = {f["properties"]["code"]: f["properties"] for f in fc["features"]}
     any_wh = any(w for f in fc["features"] for w in f["properties"]["w"])
-    note = notes(updated, any_withheld=any_wh)
+    note = notes(built_on, fc["properties"]["period"], any_withheld=any_wh)
     hours = [(b + "時", v, False) for b, v in zip(P["hour_bands"], P["city_hours"])]
 
     written = []
@@ -261,14 +271,15 @@ def build_city(fc, updated):
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     index = json.loads((config.BUILD / "index.json").read_text(encoding="utf-8"))
-    updated = index["generated_at"]
+    # **作った日であって、数字が変わった日ではない。** 名前で取り違えない
+    built_on = index["generated_at"]
 
     all_pages, sections = [], []
     any_wh_all = False
     for c in index["cities"]:
         fc = json.loads((config.BUILD / f'{c["code"]}.geojson').read_text(encoding="utf-8"))
         any_wh_all |= any(w for f in fc["features"] for w in f["properties"]["w"])
-        written = build_city(fc, updated)
+        written = build_city(fc, built_on)
         all_pages += [w[0] for w in written]
         links = "".join(
             f'<li><a href="{code}.html">{html.escape(name)}</a></li>' for code, name in written
@@ -287,7 +298,7 @@ def main():
   <div class="prose">
     {"".join(sections)}
   </div>
-  <footer>{notes(updated, up="../", any_withheld=any_wh_all)}</footer>"""
+  <footer>{notes(built_on, index["period"], up="../", any_withheld=any_wh_all)}</footer>"""
     (OUT / "index.html").write_text(
         page(f"町丁目の一覧｜{config.SITE_NAME}",
              "掲載している町丁目の一覧です。市ごとに、町丁目ごとのページへ移動できます。",
