@@ -12,6 +12,20 @@ import re
 MIN_POPULATION = 500   # 人口がこれ未満なら率を出さない
 MAX_SUPPRESS_COUNT = 2  # 件数がこれ以下なら率を出さない
 
+# 件数の側も母数を見る（2026-09-20）。**率と同じ数字は使わない。守るものが違う。**
+#
+#   MIN_POPULATION = 500 … 率が跳ねるので率を出さない（読み違いを防ぐ）
+#   TOKUTEI_FLOOR  = 100 … 住民に結びつきうるので件数を伏せる（特定を防ぐ）
+#
+# 500 をそのまま件数に当てると、人口 200〜499 で件数 3〜5 の升が 61 消える。
+# **300 人の町の 3 件は誰も特定しない。**
+#
+# 県が公表しているのは1件ずつの記録で、町丁目別の件数は出していない。
+# 8年ぶんを足し、手口を2層に束ねているのはこちら。
+# **こちらが作った形なので、伏せる線もこちらが決める**（共通仕様3.2）。
+TOKUTEI_FLOOR = 100      # 住民に結びつきうる人口
+TOKUTEI_MAX = 5          # その人口帯で伏せる件数の上限
+
 # 件数をまとめる上限（3.2）。1〜2件は実数を出さない。
 BUCKET_MAX = 2
 
@@ -210,8 +224,38 @@ def rate_per_1k(count, population):
         return None
     return round(count / population * 1000, 2)
 
-def masked(n):
-    """升の値そのもの。1〜2件は None（伏せた）、0 と 3件以上はその数。
+def suppress_count(count, population):
+    """件数を伏せるか。**母数を見る。**
+
+    順番が効く。`suppress_rate` と同じ理由で、0件を先に外す。
+
+      1. 0件 … 伏せない。伏せると「無い」が読めなくなる
+      2. 1〜2件 … 伏せる（母数によらない）
+      3. 人口0 … **伏せない。** 住んでいる人がいないので、住民に結びつかない。
+         被害者は駅前や商業地に停めた人で、住民ではない
+      4. 件数 > 人口 … **伏せない。** 被害者が住民でない証拠
+      5. 人口が小さく、件数も小さい … 伏せる。ここが住民に結びつく
+
+    **向きをまちがえないこと。** 「人口が小さいほど伏せる」を素直に当てると、
+    3と4、つまり**もっとも特定に結びつきにくい升**を消す。
+    """
+    n = int(count)
+    if n == 0:
+        return False
+    if 1 <= n <= MAX_SUPPRESS_COUNT:
+        return True
+    if not population:
+        return False
+    if n > population:
+        return False
+    return population < TOKUTEI_FLOOR and n <= TOKUTEI_MAX
+
+
+def masked(n, population=None):
+    """升の値そのもの。伏せた升は None。
+
+    `population` を渡すと母数も見る（町丁目の升）。渡さないと件数だけで
+    決める（市の升。母数が大きいので特定に結びつかない）。
 
     bucket_count() は人に見せる文字列、こちらは機械が持つ値（共通仕様6節の
     count / count_label の2本立てと同じ分け方）。
@@ -220,7 +264,9 @@ def masked(n):
     元のファイルに実数が入っていれば伏せたことにならない（共通仕様5節）。
     """
     n = int(n)
-    return None if 1 <= n <= BUCKET_MAX else n
+    if population is None:
+        return None if 1 <= n <= BUCKET_MAX else n
+    return None if suppress_count(n, population) else n
 
 
 def bar_width(n, scale):

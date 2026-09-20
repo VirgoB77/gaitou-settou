@@ -24,7 +24,8 @@ checks="-m|unittest|discover|-s|tests
 scripts/check_small_counts.py
 scripts/check_copy.py
 scripts/check_headings.py
-scripts/check_nanori.py"
+scripts/check_nanori.py
+scripts/check_bosuu.py"
 
 # **一覧に書き忘れたものを、一覧で探さない。**
 # 名前で並べた見張りは、名前を増やした日に黙る（共通仕様4節）。

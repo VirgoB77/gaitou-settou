@@ -319,5 +319,49 @@ class TestOnlyOneWayIsRejected(unittest.TestCase):
             self.assertGreater(math.comb(k, m), 1, f"k={k} m={m}")
 
 
+class TestSuppressCount(unittest.TestCase):
+    """件数の線が母数を見ているか（2026-09-20）。
+
+    **向きをまちがえないこと。** 「人口が小さいほど伏せる」を素直に当てると、
+    もっとも特定に結びつきにくい升（住んでいない町の大きな件数）を消す。
+    結びつくのは「人口が小さい**かつ**件数も小さい」升。
+
+    **捕まえないもの。** 閾値が妥当か。書いてあるとおりかしか見ていない。
+    """
+
+    def test_zero_is_never_hidden(self):
+        """0件は伏せない。伏せると「無い」が読めなくなる。"""
+        for pop in (0, 4, 99, 100, 10000):
+            self.assertFalse(privacy.suppress_count(0, pop), f"人口{pop}")
+
+    def test_one_and_two_always_hidden(self):
+        for pop in (0, 4, 99, 100, 10000, None):
+            for n in (1, 2):
+                self.assertTrue(privacy.suppress_count(n, pop), f"人口{pop} 件数{n}")
+
+    def test_no_residents_is_not_hidden(self):
+        """住んでいる人がいない町丁目。被害者は住民ではない。"""
+        self.assertFalse(privacy.suppress_count(98, 0))
+        self.assertFalse(privacy.suppress_count(3, 0))
+
+    def test_more_than_residents_is_not_hidden(self):
+        """件数が人口を超えている。被害者が住民でない証拠。"""
+        self.assertFalse(privacy.suppress_count(28, 4))
+        self.assertFalse(privacy.suppress_count(225, 93))
+
+    def test_small_population_small_count_is_hidden(self):
+        self.assertTrue(privacy.suppress_count(3, 26))
+        self.assertTrue(privacy.suppress_count(5, 57))
+
+    def test_big_population_small_count_is_not_hidden(self):
+        """300人の町の3件は誰も特定しない。率の線（500）を流用しない。"""
+        self.assertFalse(privacy.suppress_count(3, 300))
+        self.assertFalse(privacy.suppress_count(3, privacy.MIN_POPULATION - 1))
+
+    def test_two_lines_are_different_numbers(self):
+        """守っているものが違うので、同じ数字にしない。"""
+        self.assertNotEqual(privacy.TOKUTEI_FLOOR, privacy.MIN_POPULATION)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

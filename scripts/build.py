@@ -53,13 +53,16 @@ def area_values(raw, years):
             for layer in config.TOWN_LAYERS]
 
 
-def city_masu(values_by_area):
+def city_masu(values_by_area, pops=None):
     """市ぜんぶの真の件数から、公開する形を作る。
 
     values_by_area[区画][層] = 真の件数。
     戻り値は (n, w, 層ごとの合計)。
       n[区画][層]  … 出す数。伏せたものは None
-      w[区画][層]  … True なら補完的伏せ（3件以上だが伏せた。画面は「非公開」）
+      w[区画][層]  … True なら3件以上だが伏せた升（画面は「非公開」）。
+                     理由は2つあるが、**札は分けない。** 分けると読者に
+                     「どちらで伏せたか」が分かり、隠れる場所が減る（共通仕様3.2）
+      pops[区画]   … 夜間人口。渡すと母数の側の線も当てる
 
     **ここが唯一の出口。** 件数を書き出す経路をほかに作らない（共通仕様5節）。
     合計は作らない。合計と内訳を両方出すと引き算で戻る（共通仕様3.2）。
@@ -74,6 +77,12 @@ def city_masu(values_by_area):
         for ai, (v, st) in enumerate(zip(col, states)):
             n[ai][li] = v if st == privacy.SHOWN else None
             w[ai][li] = st == privacy.WITHHELD
+            # 母数の側の線。**complement_suppress のあとに当てる。**
+            # 伏せる升が増えると k が増えるので、まとまりの余裕は広がる方向。
+            # 札は「非公開」。値が3以上なので「1-2」と書くと嘘になる。
+            if pops and n[ai][li] is not None and privacy.suppress_count(v, pops[ai]):
+                n[ai][li] = None
+                w[ai][li] = True
     return n, w, totals
 
 
@@ -187,7 +196,8 @@ def build_city(city_code):
         })
 
     # まとまり（市 × 層）ごとに伏せる。区画を1つずつ見ても補完的伏せは決まらない。
-    n_all, w_all, layer_total = city_masu(area_rows)
+    n_all, w_all, layer_total = city_masu(
+        area_rows, [f["properties"]["jinko"] for f in features])
     for f, n, w in zip(features, n_all, w_all):
         f["properties"]["n"] = n
         f["properties"]["w"] = w
@@ -417,7 +427,7 @@ def cross_site_index(fcs, city_teguchi, match):
                     "city": P["city"],
                     "kind": f"犯罪統計/{t}",
                     "period": y,
-                    "count": privacy.masked(n),
+                    "count": privacy.masked(n),   # 市の升。母数が大きい
                     "count_label": privacy.bucket_count(n),
                     "population": pop,
                     "rate_per_1k": privacy.rate_per_1k(n, pop),

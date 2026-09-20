@@ -17,6 +17,9 @@ import check_small_counts as leak
 import config
 import privacy
 
+# 画面と record が使う「非公開」の札。geojson の properties から取る
+WITHHELD_LABEL = "非公開"
+
 INDEX = ROOT / "index.json"
 
 
@@ -44,10 +47,26 @@ class TestSmallCountsAreHidden(unittest.TestCase):
         self.assertEqual(bad, [], f"1〜2件が実数のまま出ている: {bad[:3]}")
 
     def test_label_matches_count(self):
-        """count が null なら label は "1-2"。数なら同じ数の文字列。"""
+        """count が null なら札は2種類のどちらか。数なら同じ数の文字列。
+
+        **札が2種類ある**（共通仕様6節）。
+
+          "1-2"   … 値は 1 か 2
+          "非公開" … 値は 1 以上。**3 以上かもしれない**
+
+        前は "1-2" しか認めていなかった。母数の側の線を入れて、
+        3件以上でも伏せる升ができたので直した（2026-09-20）。
+        **「1-2」と書くと嘘になる升**があるのが理由で、
+        検査の歯を抜いたのではない。
+
+        **捕まえないもの。** どちらの札が正しいか。
+        値を持っていないので、札と値の食い違いは見られない。
+        見ているのは「知らない札が出ていないか」だけ。
+        """
+        fuseji = {f"1-{privacy.BUCKET_MAX}", WITHHELD_LABEL}
         for m in self.masu:
             if m["count"] is None:
-                self.assertEqual(m["count_label"], f"1-{privacy.BUCKET_MAX}", m)
+                self.assertIn(m["count_label"], fuseji, m)
             else:
                 self.assertEqual(m["count_label"], str(m["count"]), m)
 
