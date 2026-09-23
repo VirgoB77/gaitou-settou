@@ -9,17 +9,28 @@ robots.txt はホストごとに1回の実行で1度だけ取る（56本の CSV 
 転送（redirect）で別の場所へ行くときも、転送先を robots.txt で確かめる。
 転送で拒否をすり抜けない。
 
-robots.txt そのものが返したもの:
+robots.txt の結果（共通仕様3.4）:
 
-    2xx        中身を読んで、書いてあるとおりにする
-    404 など   置いていない。制限なし（手紙の写し docs/letters/ の実例と同じ）
-    401・403   読ませてもらえない。拒否とみる（Python 標準の robotparser と同じ）
-    429・503   断られた。本体と同じく、その回は中止して次回に回す
-    その他 5xx・通信できない・時間切れ
-               **確かめられなかった。この回はそのホストに行かない。**
+    相手が答えた
+      2xx        中身を読む。中身が止めていれば取らない
+      404・410   置いていない。robots.txt の上では制限がない
+      401・403   相手が robots.txt を見せない。取らない
+      429・503   断られた。本体と同じく、その回は中止して次回に回す
+      上のどれでもない（400・405・451、ほかの4xx・5xx）
+                 **止めていないと確かめられない。この回は取らない。**
+                 「通してよい」と決まっていない状態を、推測で通さない
+    こちらから届かなかった（通信・中継・時間切れ）
+                 **相手の答えではない。記録で分ける。** この回は取らない
 
-最後の行は、確かめられないまま取ると戻せないため。
-取らなかった分は翌月に取れる（取り返しがつくかどうかで線を引く）。
+**robots.txt が止めていないことは、取ってよいことを意味しない。**
+規約・公開条件の判断は別（共通仕様3.4）。ここが見るのは robots.txt だけ。
+
+**捕まえないもの。**
+
+  ・待機列。HTML が返れば1本ずつ「CSV ではない」で失敗にするが、
+    その回は続ける。待機列の画面かエラーページかを、機械では見分けていない
+  ・http:// を中継経由で取るとき、中継の 403 と相手の 403 は区別できない。
+    取得先は https なので、中継の断りは「届かなかった」として出る
 
 **毎回、設定したものを全部取りに行く。** 手元に同じ名前のファイルがあっても飛ばさない。
 飛ばすと、配布元が同じ名前のまま中身を差し替えたときに気づけない。
@@ -90,12 +101,28 @@ class NotData(Exception):
     """HTTP では成功したが、中身が期待した形ではない（エラーページなど）。"""
 
 
-class RobotsDenied(Exception):
-    """robots.txt が拒否している。取りに行かない。回り込まない。"""
+class RobotsStop(Exception):
+    """robots.txt の都合で、本体へ行かない。回り込まない。
+
+    status は観測の記録に書く名前。**相手の答えと、こちらの都合を分ける。**
+
+      robots_disallowed   相手の robots.txt の中身が止めている
+      robots_refused      相手が robots.txt を 401・403 で見せない
+      robots_unusable     相手は答えたが、止めていないと確かめられない応答
+      robots_unreachable  **こちらから届かなかった。相手の答えではない**
+    """
+
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
 
 
-class RobotsUnknown(Exception):
-    """robots.txt を確かめられなかった。この回はそのホストに行かない。"""
+class RobotsDenied(RobotsStop):
+    """相手が止めている（中身・401・403）。"""
+
+
+class RobotsUnknown(RobotsStop):
+    """止めていないと確かめられない（相手の応答が根拠にならない／届かない）。"""
 
 
 # この回に見た robots.txt。ホストごとに1つ。main() が回の頭で空にする。
@@ -137,16 +164,19 @@ def robots_for(url):
     if key in _robots:
         return _robots[key]
     robots_url = f"{key}/robots.txt"
-    rec = {"url": robots_url, "checked_at": now(), "http_status": None,
+    # reached … 相手が HTTP で答えたか。False はこちらの都合（通信・中継・時間切れ）
+    rec = {"url": robots_url, "checked_at": now(), "reached": None, "http_status": None,
            "result": None, "sha256": None, "crawl_delay": None, "error": None}
     rp = urllib.robotparser.RobotFileParser(robots_url)
     try:
         status, body = _fetch_robots(robots_url)
     except Exception as e:
-        rec.update(result="unreachable", error=f"{type(e).__name__}: {e}")
+        # **こちらから届かなかった。** 中継が CONNECT を断った（403 を含む）ときもここ。
+        # 相手の 403 とは記録を分ける（共通仕様3.4）
+        rec.update(reached=False, result="unreachable", error=f"{type(e).__name__}: {e}")
         rp = None
     else:
-        rec["http_status"] = status
+        rec.update(reached=True, http_status=status)
         if status in (429, 503):
             rec["result"] = "halted"
             rp = None
@@ -154,34 +184,41 @@ def robots_for(url):
             rp.parse(body.decode("utf-8", errors="replace").splitlines())
             rec.update(result="parsed", sha256=sha256(body),
                        crawl_delay=rp.crawl_delay(config.USER_AGENT))
-        elif status in (401, 403):
-            rp.disallow_all = True
-            rec["result"] = "disallow_all"
-        elif 400 <= status < 500:
+        elif status in (404, 410):
             rp.allow_all = True
             rec["result"] = "not_found"
+        elif status in (401, 403):
+            rp.disallow_all = True
+            rec["result"] = "refused"
         else:
-            rec["result"] = "unreachable"
+            # 400・405・451、ほかの4xx・5xx。「通してよい」と決まっていない
+            rec["result"] = "unusable"
             rp = None
     _robots[key] = (rec, rp)
     return _robots[key]
 
 
 def check_robots(url):
-    """取りに行ってよいかを robots.txt で確かめる。だめなら例外。
+    """robots.txt が止めていないかを確かめる。止めている・確かめられないなら例外。
 
-    拒否 → RobotsDenied。確かめられない → RobotsUnknown。
+    **通っても「取ってよい」ではない。** 規約・公開条件は別の判断（共通仕様3.4）。
     robots.txt に 429・503 → Halted（本体と同じ扱い。その回は中止）。
     **別の URL・別のホスト・http への言い換えで取り直さない。**
     """
     rec, rp = robots_for(url)
-    if rec["result"] == "halted":
-        raise Halted(rec["http_status"])
-    if rp is None:
-        why = rec["error"] or f"HTTP {rec['http_status']}"
-        raise RobotsUnknown(f"{rec['url']} を確かめられなかった（{why}）")
+    r, code = rec["result"], rec["http_status"]
+    if r == "halted":
+        raise Halted(code)
+    if r == "unreachable":
+        raise RobotsUnknown("robots_unreachable",
+                            f"{rec['url']} に届かなかった（こちら側：{rec['error']}）")
+    if r == "unusable":
+        raise RobotsUnknown("robots_unusable",
+                            f"{rec['url']} が HTTP {code} を返した。止めていないと確かめられない")
+    if r == "refused":
+        raise RobotsDenied("robots_refused", f"{rec['url']} を相手が HTTP {code} で見せない")
     if not rp.can_fetch(config.USER_AGENT, url):
-        raise RobotsDenied(f"{rec['url']} が拒否している")
+        raise RobotsDenied("robots_disallowed", f"{rec['url']} の中身が止めている")
 
 
 class _RobotsRedirect(urllib.request.HTTPRedirectHandler):
@@ -326,8 +363,7 @@ def replace_dir(dest, data):
 
 def robots_entry(entry, prev_sha, e):
     """robots.txt で取らなかった1本の記録。本体には行っていない。"""
-    status = "robots_disallowed" if isinstance(e, RobotsDenied) else "robots_unknown"
-    return failed_entry(entry, prev_sha, status, str(e))
+    return failed_entry(entry, prev_sha, e.status, str(e))
 
 
 def failed_entry(entry, prev_sha, status, err, http_status=None):
@@ -352,7 +388,7 @@ def observe_csv(pref, year, teguchi):
     # **本体の前に robots.txt。** 拒否・不明なら get を呼ばない
     try:
         check_robots(url)
-    except (RobotsDenied, RobotsUnknown) as e:
+    except RobotsStop as e:
         print(f"  取らない {name}  {e}")
         return robots_entry(entry, prev, e)
     try:
@@ -360,7 +396,7 @@ def observe_csv(pref, year, teguchi):
         check_csv(body)
     except Halted:
         raise
-    except (RobotsDenied, RobotsUnknown) as e:     # 転送先で拒否・不明
+    except RobotsStop as e:     # 転送先で拒否・不明
         print(f"  取らない {name}  {e}")
         return robots_entry(entry, prev, e)
     except urllib.error.HTTPError as e:
@@ -400,7 +436,7 @@ def observe_boundary(c):
     # **本体の前に robots.txt。** 拒否・不明なら get を呼ばない
     try:
         check_robots(url)
-    except (RobotsDenied, RobotsUnknown) as e:
+    except RobotsStop as e:
         print(f"  取らない {label}  {e}")
         return robots_entry(entry, prev_zip, e)
     try:
@@ -408,7 +444,7 @@ def observe_boundary(c):
         members = zip_members(data, c["code"])
     except Halted:
         raise
-    except (RobotsDenied, RobotsUnknown) as e:     # 転送先で拒否・不明
+    except RobotsStop as e:     # 転送先で拒否・不明
         print(f"  取らない {label}  {e}")
         return robots_entry(entry, prev_zip, e)
     except urllib.error.HTTPError as e:

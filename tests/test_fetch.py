@@ -389,10 +389,32 @@ class TestRobots(Base):
         self.assertEqual(len(self.fake.calls), self.n_targets)
 
     def test_no_robots_file_means_no_restriction(self):
-        """404 は置いていない＝制限なし（手紙の写しの実例と同じ）。"""
-        code, doc = self.run_once()
-        self.assertEqual(code, 0)
-        self.assertEqual({r["result"] for r in doc["robots"]}, {"not_found"})
+        """404・410 は置いていない。robots.txt の上では制限がない（共通仕様3.4）。"""
+        for code in (404, 410):
+            with self.subTest(code=code):
+                self.fake.calls.clear()
+                self.robots.by_url[HYOGO] = (code, b"")
+                self.robots.by_url[ESTAT] = (code, b"")
+                rc, doc = self.run_once()
+                self.assertEqual(rc, 0)
+                self.assertEqual(len(self.fake.calls), self.n_targets)
+                self.assertEqual({r["result"] for r in doc["robots"]}, {"not_found"})
+
+    def test_other_4xx_is_not_no_robots(self):
+        """400・405・451 などは「通してよい」と決まっていない。推測で通さない。"""
+        for code in (400, 405, 451, 418):
+            with self.subTest(code=code):
+                self.fake.calls.clear()
+                self.robots.by_url[HYOGO] = (code, b"")
+                rc, doc = self.run_once()
+                self.assertEqual(rc, 1)
+                self.assertNotIn("web.pref.hyogo.lg.jp", self.hosts_called(),
+                                 f"robots.txt が {code} なのに本体へ行った")
+                csv = {f["status"] for f in doc["files"] if f["kind"] == "police_csv"}
+                self.assertEqual(csv, {"robots_unusable"})
+                rec = next(r for r in doc["robots"] if r["url"] == HYOGO)
+                self.assertEqual((rec["reached"], rec["http_status"], rec["result"]),
+                                 (True, code, "unusable"))
 
     # 2. 拒否 → 本体の取得関数を呼ばない
     def test_disallow_never_calls_get(self):
@@ -411,13 +433,18 @@ class TestRobots(Base):
         self.run_once()
         self.assertNotIn("web.pref.hyogo.lg.jp", self.hosts_called())
 
-    def test_401_403_is_disallow(self):
+    def test_401_403_is_refused_by_them(self):
         for code in (401, 403):
             with self.subTest(code=code):
                 self.fake.calls.clear()
                 self.robots.by_url[HYOGO] = (code, b"")
                 _, doc = self.run_once()
                 self.assertNotIn("web.pref.hyogo.lg.jp", self.hosts_called())
+                csv = {f["status"] for f in doc["files"] if f["kind"] == "police_csv"}
+                self.assertEqual(csv, {"robots_refused"})
+                rec = next(r for r in doc["robots"] if r["url"] == HYOGO)
+                self.assertEqual((rec["reached"], rec["http_status"], rec["result"]),
+                                 (True, code, "refused"))
 
     # 判定不能 → この回はそのホストに行かない
     def test_unreachable_robots_means_do_not_go(self):
@@ -428,9 +455,10 @@ class TestRobots(Base):
         self.assertNotIn("web.pref.hyogo.lg.jp", self.hosts_called(),
                          "確かめられないまま本体へ行った")
         csv = [f for f in doc["files"] if f["kind"] == "police_csv"]
-        self.assertEqual({f["status"] for f in csv}, {"robots_unknown"})
+        self.assertEqual({f["status"] for f in csv}, {"robots_unreachable"})
         rec = next(r for r in doc["robots"] if r["url"] == HYOGO)
-        self.assertEqual(rec["result"], "unreachable")
+        self.assertEqual((rec["reached"], rec["http_status"], rec["result"]),
+                         (False, None, "unreachable"))
 
     def test_5xx_robots_means_do_not_go(self):
         for code in (500, 502, 504):
@@ -439,6 +467,52 @@ class TestRobots(Base):
                 self.robots.by_url[HYOGO] = (code, b"")
                 _, doc = self.run_once()
                 self.assertNotIn("web.pref.hyogo.lg.jp", self.hosts_called())
+                csv = {f["status"] for f in doc["files"] if f["kind"] == "police_csv"}
+                self.assertEqual(csv, {"robots_unusable"}, "相手は答えている。届かなかったのではない")
+
+    def test_their_403_and_our_block_are_recorded_apart(self):
+        """相手の 403 と、こちらの中継が断った（CONNECT 403）を記録で混ぜない。
+
+        **本物の _fetch_robots を通す。** 偽物で確かめると、区別を偽物が作ってしまう。
+        中継の断りは例外で来る（urllib は CONNECT の失敗を HTTP の状態にしない）。
+        """
+        import urllib.error
+        real = TestRobotsKeepsManners._orig_fetch_robots
+
+        def ask(side_effect):
+            fetch_data._robots.clear()
+
+            def fake_urlopen(req, timeout):
+                raise side_effect
+            with mock.patch.object(fetch_data, "_fetch_robots", real), \
+                 mock.patch.object(fetch_data.urllib.request, "urlopen", fake_urlopen), \
+                 mock.patch.object(fetch_data.time, "sleep", lambda t: None):
+                return fetch_data.robots_for("https://web.pref.hyogo.lg.jp/kk26/a.csv")[0]
+
+        theirs = ask(urllib.error.HTTPError(HYOGO, 403, "Forbidden", {}, None))
+        ours = ask(urllib.error.URLError(OSError("Tunnel connection failed: 403 Forbidden")))
+        self.assertEqual((theirs["reached"], theirs["http_status"], theirs["result"]),
+                         (True, 403, "refused"))
+        self.assertEqual((ours["reached"], ours["http_status"], ours["result"]),
+                         (False, None, "unreachable"),
+                         "こちらの中継の 403 を、相手の答えとして記録した")
+
+        # 1本ずつの記録でも混ざらない
+        self.robots.by_url[HYOGO] = urllib.error.URLError(
+            OSError("Tunnel connection failed: 403 Forbidden"))
+        _, doc = self.run_once()
+        csv = {f["status"] for f in doc["files"] if f["kind"] == "police_csv"}
+        self.assertEqual(csv, {"robots_unreachable"})
+
+    def test_redirect_denial_inside_get_is_recorded(self):
+        """本体の転送先で止まったとき（_RobotsRedirect が get の中で止める）も記録する。"""
+        name, url = csv_targets()[5]
+        self.fake.override[url] = fetch_data.RobotsDenied(
+            "robots_disallowed", "https://other.example/robots.txt の中身が止めている")
+        rc, doc = self.run_once()
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.entry(doc, name)["status"], "robots_disallowed")
+        self.assertFalse((self.raw / name).exists(), "止まった1本を書いていない")
 
     def test_previous_data_is_kept_when_not_fetched(self):
         self.run_once()
