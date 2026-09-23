@@ -75,5 +75,75 @@ class TestWorkflowShellParses(unittest.TestCase):
                                  f"{wf.name}:{i} が `\\\\` で終わっている: {line.strip()}")
 
 
+STEP = re.compile(r"^(\s+)- name: (.+)$", re.M)
+
+
+def steps(text):
+    """(段の名前, 段の本文) を上から順に。YAML は解かず、`- name:` で区切る。"""
+    marks = list(STEP.finditer(text))
+    out = []
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        out.append((m.group(2).strip(), text[m.start():end]))
+    return out
+
+
+class TestFetchOrder(unittest.TestCase):
+    """取得は1系統。**金庫にしまえた観測だけを公開する**（2026-09-23）。
+
+    順番：取ってくる → 生データと観測の記録を金庫にしまう → 作る
+          → 加工の記録を金庫にしまう → もう一度検査する → 公開側に入れる
+    """
+
+    KOUSHIN = ROOT / ".github" / "workflows" / "koushin.yml"
+    ORDER = ["取ってくる", "生データと観測の記録を金庫にしまう", "作る",
+             "加工の記録を金庫にしまう", "もう一度検査する（作ったものに対して）", "結果をしまう"]
+
+    def setUp(self):
+        self.steps = steps(self.KOUSHIN.read_text(encoding="utf-8"))
+        self.by_name = dict(self.steps)
+
+    def test_order(self):
+        names = [n for n, _ in self.steps]
+        for n in self.ORDER:
+            self.assertIn(n, names, f"段「{n}」が無い")
+        idx = [names.index(n) for n in self.ORDER]
+        self.assertEqual(idx, sorted(idx), f"段の順番が違う: {[names[i] for i in sorted(idx)]}")
+
+    def test_raw_is_saved_even_if_fetch_failed(self):
+        """取れなかった回も、取れた分と観測の記録は金庫にしまう。"""
+        body = self.by_name["生データと観測の記録を金庫にしまう"]
+        self.assertIn("!cancelled()", body)
+        self.assertIn("steps.fetch.outcome", body)
+        self.assertIn("id: fetch", self.by_name["取ってくる"])
+        self.assertIn("data/raw/manifest", body)
+
+    def test_publishing_steps_do_not_run_after_a_failure(self):
+        """`if:` を付けると、前の段が落ちても走りうる。公開までの段には付けない。"""
+        for n in self.ORDER[2:]:
+            self.assertNotRegex(self.by_name[n], r"\n\s+if:",
+                                f"「{n}」に if: がある。金庫にしまえなかった観測で走りうる")
+
+    def test_both_vault_steps_confirm_the_push(self):
+        for n in ("生データと観測の記録を金庫にしまう", "加工の記録を金庫にしまう"):
+            self.assertIn("kinko_shimau.sh", self.by_name[n])
+        script = (ROOT / "scripts" / "kinko_shimau.sh").read_text(encoding="utf-8")
+        self.assertIn("merge-base --is-ancestor HEAD origin/main", script)
+        if shutil.which("bash"):
+            r = subprocess.run(["bash", "-n", str(ROOT / "scripts" / "kinko_shimau.sh")],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_only_one_workflow_fetches(self):
+        fetchers = [wf.name for wf in WORKFLOWS
+                    if "fetch_data.py" in wf.read_text(encoding="utf-8")]
+        self.assertEqual(fetchers, ["koushin.yml"])
+
+    def test_public_commit_refuses_raw_and_zip(self):
+        body = self.by_name["結果をしまう"]
+        self.assertIn("data/raw/", body)
+        self.assertIn(r"\.zip$", body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

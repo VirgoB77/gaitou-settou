@@ -1,7 +1,15 @@
 name: 犯罪オープンデータを取り込む
 
-# 手で押して動かす。あわせて月1回、新しい年のデータが出ていないか見に行く。
+# 手で押して動かす。あわせて月1回、配布元を見に行く。
 # 兵庫県警は年1回しか出さないので、頻度はこれで足りる（共通仕様3.4）。
+#
+# **このサイトの取得は、この workflow の1本だけ。** 金庫（<公開用>-raw）は取りに行かない。
+# 金庫は、生データ・取ってきた ZIP・観測の記録を受け取るだけの置き場（共通仕様9節）。
+#
+# 順番を崩さない：
+#   取ってくる → 生データと観測の記録を金庫にしまう → しまえたことを確かめる
+#   → 作る → 加工の記録を金庫にしまう → 検査 → 公開側に入れる
+# **金庫にしまえなかった観測は、公開しない。**
 on:
   workflow_dispatch:
   schedule:
@@ -99,37 +107,43 @@ jobs:
           # そのうち1か所を壊した（2026-09-19）。判断を2か所に置かない。
           GROUP=1 sh scripts/check_all.sh
 
+      # **毎回、設定したものを全部取りに行く。** 在っても飛ばさない（理由は scripts/fetch_data.py の頭）。
+      # 前回と同じ中身なら生データには触らない。取れなかったものは前回の生データを残す。
+      # 観測の記録（data/raw/manifest/）は毎回1本残る。
+      # 1本でも取れなかったら、この段は落ちる。次の「金庫にしまう」段だけ走り、公開には進まない。
       - name: 取ってくる
+        id: fetch
         run: python scripts/fetch_data.py
 
+      # **加工より先に、取ったものを金庫にしまう。** 金庫は private なので、公開側の検査を待たない。
+      # 取れなかった回も、取れた分と観測の記録はしまう（「見に行って取れなかった」も記録）。
+      # しまえたか（金庫の main に入ったか）は scripts/kinko_shimau.sh が確かめる。
+      - name: 生データと観測の記録を金庫にしまう
+        if: ${{ !cancelled() && steps.fetch.outcome != 'skipped' }}
+        working-directory: _raw
+        run: |
+          # 観測の記録は毎回1本増える。増えていなければ、取得の段が記録を書く前に落ちている
+          if [ -z "$(git ls-files --others --exclude-standard -- data/raw/manifest)" ]; then
+            echo "観測の記録（data/raw/manifest）が増えていない。止まる"
+            exit 1
+          fi
+          sh ../scripts/kinko_shimau.sh "生データを $(date -u +%Y-%m-%d) に観測した" data/raw
+
+      # ここから先は、金庫にしまえた観測だけで作る（前の段が落ちたら走らない）。
       - name: 作る
         run: |
           python scripts/build.py
           python scripts/pages.py
 
-      # 取り直せないものを先にしまう。金庫は private なので、公開側の検査を待たない。
-      - name: 生データを金庫にしまう
-        if: ${{ !cancelled() }}
+      # 加工の記録（公開しないもの）も金庫に置く。しまえなかったら公開に進まない。
+      - name: 加工の記録を金庫にしまう
         working-directory: _raw
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           mkdir -p data/reports
           cp -f ../data/parse-unknown.md data/reports/ 2>/dev/null || true
           cp -f ../data/build/unmatched.csv data/reports/ 2>/dev/null || true
           cp -f ../data/build/suppress-report.md data/reports/ 2>/dev/null || true
-          git add data
-          if git diff --cached --quiet; then
-            echo "生データに変わりなし"
-          else
-            git commit -m "生データを $(date -u +%Y-%m-%d) の時点でためた"
-            for i in 1 2 3 4 5; do
-              git push origin HEAD:main && exit 0
-              git pull --rebase --autostash -X theirs origin main || { git rebase --abort 2>/dev/null || true; exit 1; }
-              sleep $((i * 3))
-            done
-            echo "5回試したが金庫に送れなかった"; exit 1
-          fi
+          sh ../scripts/kinko_shimau.sh "加工の記録を $(date -u +%Y-%m-%d) の時点で置いた" data/reports
 
       # 最初の検査は昨日の出力に対してなので、今日の出力の伏せ忘れは止められない。
       # ここで止める（止まっても生データはもう金庫にある）。
@@ -159,9 +173,9 @@ jobs:
           # data/build は市を足すたびに増えるので丸ごと入れるが、個票だけは外す。
           # 市コードを直書きすると、市を足したときに足し忘れる。
           git reset -q -- data/build/unmatched.csv data/build/suppress-report.md 2>/dev/null || true
-          # 見張り：許可リストをいじっても、生データ・記録・symlink が混ざったら止まる
+          # 見張り：許可リストをいじっても、生データ・記録・取ってきた ZIP・symlink が混ざったら止まる
           if git diff --cached --name-only -z | tr '\0' '\n' \
-               | grep -E '^(data/raw/|data/build/(unmatched\.csv|suppress-report\.md)$|data/[^/]+\.md$|_raw/)'; then
+               | grep -E '^(data/raw/|data/build/(unmatched\.csv|suppress-report\.md)$|data/[^/]+\.md$|_raw/)|\.zip$'; then
             echo "公開側の commit に生データか記録が混ざった。止まる"
             exit 1
           fi
