@@ -3,10 +3,42 @@
 取得の作法は共通仕様3.4に従う。
 同時接続は1本、間隔は5秒以上、429/503 が返ったらその回は中止して次回に回す。
 押し込まない。回り込まない。
+
+**毎回、設定したものを全部取りに行く。** 手元に同じ名前のファイルがあっても飛ばさない。
+飛ばすと、配布元が同じ名前のまま中身を差し替えたときに気づけない。
+取れた中身は前回の生データと比べて、
+
+    同じ     生データには触らない（差分を出さない）
+    違う     同じ場所を置き換える。前の版は金庫の Git 履歴に残る
+    取れない 前回の生データには触らない。途中まで取れたものも書かない
+
+どの場合も、観測の記録（manifest）を1回ぶん残す。
+**「この日に見に行って、同じだった」も記録になる。**
+
+置き場（config.RAW。workflow では private の金庫へのリンク）:
+
+    <配布元のファイル名>.csv      県警CSV
+    境界_<市名>/                  境界 ZIP を展開したもの（地図を作る段が読む）
+    source_zip/境界_<市名>.zip    取ってきた ZIP そのもの（証拠）
+    manifest/<観測日時>.json      この回の観測の記録
+
+境界 ZIP は、取るたびにバイト列が変わることがある
+（2026-09-18 と 09-21 で、ZIP の大きさが1バイトずつ違った。中身が同じかは確かめていない）。
+そのため ZIP は**展開した中身**で比べる。中身が同じなら前の ZIP を残し、
+今回の ZIP のバイト列の SHA-256 は manifest に残す。
+
+1本でも取れなかったら、終了コード 1 で終わる（manifest は書く）。
+workflow はそれを見て、取れた分と記録だけを金庫にしまい、公開には進まない。
 """
 
+import datetime
+import hashlib
 import io
+import json
+import os
+import shutil
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -21,15 +53,26 @@ sys.stdout.reconfigure(encoding="utf-8")
 # HTTPヘッダは ASCII しか通らない。日本語を入れると送信時に落ちる。
 HEADERS = {"User-Agent": config.USER_AGENT}
 
+# 作業中のファイルに付ける印。金庫の .gitignore が同じ印を外す。
+PART = ".part"
+
 _last_request = 0.0
 
 
 class Halted(Exception):
     """断られたので、その回は打ち切る。"""
 
+    def __init__(self, code):
+        super().__init__(f"{code} が返りました。この回は中止します（次回に回す）")
+        self.code = code
+
+
+class NotData(Exception):
+    """HTTP では成功したが、中身が期待した形ではない（エラーページなど）。"""
+
 
 def get(url):
-    """1本ずつ、5秒以上あけて取りに行く。"""
+    """1本ずつ、5秒以上あけて取りに行く。(HTTP の状態, 中身) を返す。"""
     global _last_request
     wait = config.REQUEST_INTERVAL - (time.monotonic() - _last_request)
     if wait > 0:
@@ -39,54 +82,339 @@ def get(url):
     req = urllib.request.Request(url, headers=HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=120) as r:
-            return r.read()
+            return r.status, r.read()
     except urllib.error.HTTPError as e:
         if e.code in (429, 503):
-            raise Halted(f"{e.code} が返りました。この回は中止します（次回に回す）")
+            raise Halted(e.code) from e
         raise
 
 
-def fetch_police():
-    config.RAW.mkdir(parents=True, exist_ok=True)
-    for pref in config.PREFS.values():
-        for year in config.YEARS:
-            for teguchi in config.TEGUCHI:
-                name = pref.csv_name(year, teguchi)
-                out = config.RAW / name
-                if out.exists():
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def file_sha256(path):
+    return sha256(path.read_bytes()) if path.is_file() else None
+
+
+def rel(path):
+    return path.relative_to(config.RAW).as_posix()
+
+
+def write_atomic(path, data):
+    """一時ファイルに書き切ってから置き換える。途中で落ちても前の版は壊れない。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=PART)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def check_csv(body):
+    """空と HTML は CSV ではない。取れたことにしない（前回の生データを守る）。"""
+    if not body.strip():
+        raise NotData("中身が空")
+    head = body[:512].lstrip().lower()
+    if head.startswith((b"<!doctype", b"<html")):
+        raise NotData("CSV ではなく HTML が返った")
+
+
+def zip_members(data, city_code):
+    """ZIP の中身を (名前, 大きさ, SHA-256) で返す。形が違えば NotData。
+
+    展開先から外に出る名前（先頭の / 、\\ 、.. の段）は受け付けない。
+    下の階層に入っているだけのものは受け付ける（配布元の ZIP の形を狭く決め打たない）。
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            bad = z.testzip()
+            if bad is not None:
+                raise NotData(f"ZIP の {bad} が壊れている")
+            members = []
+            for info in z.infolist():
+                if info.is_dir():
                     continue
-                url = pref.csv_url(year, teguchi)
-                try:
-                    out.write_bytes(get(url))
-                    print(f"  取得 {name}  {out.stat().st_size:,} バイト")
-                except Halted as e:
-                    print(f"  中止 {e}")
-                    return
-                except Exception as e:
-                    print(f"  失敗 {name}  {e}")
-                    print(f"       {url}")
+                name = info.filename
+                if name.startswith("/") or "\\" in name or ".." in name.split("/"):
+                    raise NotData(f"ZIP に展開先の外を指す名前がある: {name}")
+                body = z.read(info)
+                members.append({"name": name, "size": len(body), "sha256": sha256(body)})
+    except zipfile.BadZipFile as e:
+        raise NotData(f"ZIP として読めない: {e}") from e
+    names = {m["name"] for m in members}
+    need = {f"r2ka{city_code}.{ext}" for ext in ("shp", "shx", "dbf")}
+    if not need <= names:
+        raise NotData(f"ZIP に {sorted(need - names)} が無い")
+    return sorted(members, key=lambda m: m["name"])
 
 
-def fetch_boundary():
-    for c in config.CITIES:
-        dest = config.RAW / f"境界_{c['name']}"
-        if (dest / f"r2ka{c['code']}.shp").exists():
-            continue
-        url = config.ESTAT_BOUNDARY.format(city_code=c["code"])
+def content_sha256(members):
+    """展開した中身の指紋。ZIP のバイト列ではなく、入っているファイルで決める。"""
+    line = "".join(f"{m['name']}\0{m['sha256']}\n" for m in members)
+    return sha256(line.encode("utf-8"))
+
+
+def dir_members(path):
+    if not path.is_dir():
+        return None
+    return sorted(({"name": p.relative_to(path).as_posix(), "size": p.stat().st_size,
+                    "sha256": file_sha256(p)}
+                   for p in path.rglob("*") if p.is_file()), key=lambda m: m["name"])
+
+
+def replace_dir(dest, data):
+    """ZIP を一時ディレクトリに展開してから、前の展開物と入れ替える。"""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=PART))
+    old = dest.parent / f".{dest.name}.old{PART}"
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            z.extractall(tmp)
+        if old.exists():
+            shutil.rmtree(old)
+        if dest.exists():
+            dest.rename(old)
+        tmp.rename(dest)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        if old.exists() and not dest.exists():
+            old.rename(dest)
+        raise
+    shutil.rmtree(old, ignore_errors=True)
+
+
+def failed_entry(entry, prev_sha, status, err, http_status=None):
+    entry.update({
+        "status": status,
+        "http_status": http_status,
+        "error": err,
+        "size": None,
+        "sha256": None,
+        "previous_sha256": prev_sha,
+        "result": "kept_previous" if prev_sha else "missing",
+    })
+    return entry
+
+
+def observe_csv(pref, year, teguchi):
+    name = pref.csv_name(year, teguchi)
+    out = config.RAW / name
+    url = pref.csv_url(year, teguchi)
+    prev = file_sha256(out)
+    entry = {"kind": "police_csv", "url": url, "path": rel(out), "fetched_at": now()}
+    try:
+        status, body = get(url)
+        check_csv(body)
+    except Halted:
+        raise
+    except urllib.error.HTTPError as e:
+        print(f"  失敗 {name}  HTTP {e.code}")
+        return failed_entry(entry, prev, "failed", f"HTTP {e.code}", e.code)
+    except NotData as e:
+        print(f"  失敗 {name}  {e}")
+        return failed_entry(entry, prev, "failed", str(e), 200)
+    except Exception as e:
+        print(f"  失敗 {name}  {e}")
+        return failed_entry(entry, prev, "failed", f"{type(e).__name__}: {e}")
+
+    new = sha256(body)
+    if prev is None:
+        result = "new"
+    elif prev == new:
+        result = "same"
+    else:
+        result = "changed"
+    if result != "same":
+        write_atomic(out, body)
+    print(f"  取得 {name}  {len(body):,} バイト  {result}")
+    entry.update({"status": "ok", "http_status": status, "error": None,
+                  "size": len(body), "sha256": new, "previous_sha256": prev,
+                  "result": result})
+    return entry
+
+
+def observe_boundary(c):
+    label = f"境界_{c['name']}"
+    dest = config.RAW / label
+    zip_path = config.RAW / "source_zip" / f"{label}.zip"
+    url = config.ESTAT_BOUNDARY.format(city_code=c["code"])
+    prev_zip = file_sha256(zip_path)
+    entry = {"kind": "estat_boundary_zip", "url": url, "path": rel(zip_path),
+             "extracted_to": rel(dest), "fetched_at": now()}
+    try:
+        status, data = get(url)
+        members = zip_members(data, c["code"])
+    except Halted:
+        raise
+    except urllib.error.HTTPError as e:
+        print(f"  失敗 {label}  HTTP {e.code}")
+        return failed_entry(entry, prev_zip, "failed", f"HTTP {e.code}", e.code)
+    except NotData as e:
+        print(f"  失敗 {label}  {e}")
+        return failed_entry(entry, prev_zip, "failed", str(e), 200)
+    except Exception as e:
+        print(f"  失敗 {label}  {e}")
+        return failed_entry(entry, prev_zip, "failed", f"{type(e).__name__}: {e}")
+
+    new_content = content_sha256(members)
+    prev_content = None
+    if zip_path.is_file():
         try:
-            data = get(url)
+            prev_content = content_sha256(zip_members(zip_path.read_bytes(), c["code"]))
+        except NotData:
+            prev_content = None   # 前の ZIP が読めないなら、今回ので置き換える
+    if prev_zip is None:
+        result = "new"
+    elif prev_content == new_content:
+        result = "same"
+    else:
+        result = "changed"
+    if result != "same":
+        write_atomic(zip_path, data)
+    # 展開物は ZIP の中身と一致させる。同じ回でも、欠けていれば作り直す
+    repaired = False
+    if result != "same" or dir_members(dest) != members:
+        replace_dir(dest, data)
+        repaired = result == "same"
+    print(f"  取得 {label}  {len(data):,} バイト  {result}")
+    entry.update({"status": "ok", "http_status": status, "error": None,
+                  "size": len(data), "sha256": sha256(data), "previous_sha256": prev_zip,
+                  "result": result,
+                  "zip_bytes_same": prev_zip == sha256(data),
+                  "content_sha256": new_content,
+                  "previous_content_sha256": prev_content,
+                  "extracted_repaired": repaired,
+                  "members": members})
+    return entry
+
+
+def not_attempted(entry):
+    prev = file_sha256(config.RAW / entry["path"])
+    return failed_entry(entry, prev, "not_attempted", "この回は中止した（前の取得で断られた）")
+
+
+def plan():
+    """この回に取りに行くものの一覧。中止しても、行かなかったものを記録に残すため。"""
+    csvs = [(pref, year, teguchi)
+            for pref in config.PREFS.values()
+            for year in config.YEARS
+            for teguchi in config.TEGUCHI]
+    return csvs, list(config.CITIES)
+
+
+def observe_all(files, halted):
+    """全部を取りに行き、manifest に書く中身を files と halted に積む。
+
+    途中で落ちても、そこまでの記録が manifest に残るように、渡された一覧に足していく。
+    """
+    csvs, cities = plan()
+
+    print("県警CSV")
+    stop = None
+    for pref, year, teguchi in csvs:
+        if stop is not None:
+            name = pref.csv_name(year, teguchi)
+            files.append(not_attempted({
+                "kind": "police_csv", "url": pref.csv_url(year, teguchi),
+                "path": name, "fetched_at": None}))
+            continue
+        try:
+            files.append(observe_csv(pref, year, teguchi))
         except Halted as e:
             print(f"  中止 {e}")
-            return
-        dest.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(io.BytesIO(data)) as z:
-            z.extractall(dest)
-        print(f"  取得 境界_{c['name']}  {len(data):,} バイト")
+            stop = e
+            name = pref.csv_name(year, teguchi)
+            files.append(failed_entry(
+                {"kind": "police_csv", "url": pref.csv_url(year, teguchi),
+                 "path": name, "fetched_at": now()},
+                file_sha256(config.RAW / name), "halted", str(e), e.code))
+            halted.append({"host": "police", "http_status": e.code})
+
+    print("町丁目境界")
+    stop = None
+    for c in cities:
+        label = f"境界_{c['name']}"
+        entry = {"kind": "estat_boundary_zip",
+                 "url": config.ESTAT_BOUNDARY.format(city_code=c["code"]),
+                 "path": f"source_zip/{label}.zip", "extracted_to": label}
+        if stop is not None:
+            files.append(not_attempted(dict(entry, fetched_at=None)))
+            continue
+        try:
+            files.append(observe_boundary(c))
+        except Halted as e:
+            print(f"  中止 {e}")
+            stop = e
+            files.append(failed_entry(dict(entry, fetched_at=now()),
+                                      file_sha256(config.RAW / entry["path"]),
+                                      "halted", str(e), e.code))
+            halted.append({"host": "e-stat", "http_status": e.code})
+
+
+def summarize(files):
+    out = {}
+    for key in ("status", "result"):
+        count = {}
+        for f in files:
+            count[f[key]] = count.get(f[key], 0) + 1
+        out[key] = dict(sorted(count.items()))
+    return out
+
+
+def write_manifest(observed_at, files, halted, error=None):
+    doc = {
+        "observed_at": observed_at,
+        "finished_at": now(),
+        "tool": "scripts/fetch_data.py",
+        "user_agent": config.USER_AGENT,
+        "interval_seconds": config.REQUEST_INTERVAL,
+        "run": {k: os.environ.get(v) for k, v in (
+            ("repository", "GITHUB_REPOSITORY"),
+            ("run_id", "GITHUB_RUN_ID"),
+            ("commit", "GITHUB_SHA"))},
+        "halted": halted,
+        "error": error,
+        "targets": len(files),
+        "summary": summarize(files),
+        "files": files,
+    }
+    # 1回の観測に1本。前の回の記録は上書きしない（同じ秒に2回走っても別の名前にする）
+    stamp = observed_at.replace("-", "").replace(":", "")
+    path = config.RAW / "manifest" / f"{stamp}.json"
+    n = 2
+    while path.exists():
+        path = config.RAW / "manifest" / f"{stamp}-{n}.json"
+        n += 1
+    write_atomic(path, (json.dumps(doc, ensure_ascii=False, indent=1) + "\n").encode("utf-8"))
+    return path, doc
+
+
+def main():
+    config.RAW.mkdir(parents=True, exist_ok=True)
+    observed_at = now()
+    files, halted, error = [], [], None
+    try:
+        observe_all(files, halted)
+    except BaseException as e:
+        error = f"{type(e).__name__}: {e}"
+        raise
+    finally:
+        path, doc = write_manifest(observed_at, files, halted, error)
+        print(f"観測の記録  {rel(path)}  {doc['summary']}")
+    ok = bool(files) and all(f["status"] == "ok" for f in files)
+    print("完了" if ok else "取れなかったものがある。前回の生データは残した")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    print("県警CSV")
-    fetch_police()
-    print("町丁目境界")
-    fetch_boundary()
-    print("完了")
+    sys.exit(main())
