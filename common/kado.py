@@ -52,7 +52,7 @@ import urllib.request
 
 YON = ("未確認", "規約未確定", "取ってはいけない", "取ってよい")
 FUDA = ("なし", "再読要", "停止要請", "使用停止", "不整合",
-        "混雑継続", "拒否継続", "引用不一致", "指紋不安定", "退役")
+        "混雑継続", "拒否継続", "引用不一致", "指紋ゆらぎ", "退役")
 KOJIN = ("はい", "いいえ", "分からない")
 SHUBETSU = ("行政", "準公的", "民間一次", "二次・集約")
 SEIKI = ("未調査", "無し", "有り・採用", "有り・不採用", "問い合わせ中")
@@ -124,12 +124,20 @@ def card_shimon(card):
 
 
 def jst_kyou(env=None):
+    """この実行の日付（日本時間）。**門は時計を見ない。**
+
+    置き場ごとに「日付を決める1か所」がある（`RUN_DATE`、または `hajimeru(today=...)` で渡す）。
+    門が別に時計を見ると、1回の実行の中で日付が食い違う。
+    **読めない RUN_DATE は、黙って今日に倒さず落とす。** 渡されていなければ None
+    （そのときは、日付が要る関所で止める）。
+    """
     env = os.environ if env is None else env
-    d = env.get("RUN_DATE") or ""
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
-        return d
-    jst = datetime.timezone(datetime.timedelta(hours=9))
-    return datetime.datetime.now(jst).date().isoformat()
+    d = env.get("RUN_DATE")
+    if d is None or d == "":
+        return None
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) or _hi(d) is None:
+        raise ValueError("RUN_DATE が読めない：%r（黙って今日に倒さない）" % d)
+    return d
 
 
 def _hi(s):
@@ -333,10 +341,50 @@ def robots_yurusu(rules, url):
     return True if best is None else best[1]
 
 
-def robots_hantei(status, ctype, body):
+def robots_kisoku_gyou(body):
+    """robots.txt のバイトから、規則の行だけを取り出す。**文字コードを選ばない。**
+
+    役所の robots.txt には Shift_JIS の注記が残っている。規則（User-agent・Allow・
+    Disallow 等）は ASCII なので、行ごとに `#` から後ろ（注記）をバイトのまま落とし、
+    残った規則の行だけを ASCII として読む。**規則の行に ASCII の外の字があれば、
+    どの文字コードの道すじか確かめられないので止める**（推し量って読まない）。
+    Shift_JIS の2バイト目に `#` と改行は出てこないので、行と注記の切れ目は壊れない。
+
+    返り値は (規則の行を並べた文字列, 理由)。止めるときは (None, 理由)。
+    """
+    if body.startswith(b"\xef\xbb\xbf"):
+        body = body[3:]
+    gyou = []
+    for raw in body.replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n"):
+        line = raw.split(b"#", 1)[0].strip()
+        if not line:
+            continue
+        if any(c >= 0x80 for c in line):
+            return None, "robots.txt の規則の行に ASCII の外の字がある（文字コードを確かめられない）"
+        gyou.append(line.decode("ascii"))
+    return "\n".join(gyou), ""
+
+
+def robots_no_basho(url, saki):
+    """転送のあとも、**同じ相手の /robots.txt** か。同じ host の http → https だけは同じ場所として扱う。
+
+    host が変わると、どの host の規則なのか曖昧になる。ほかの場所（トップページ等）へ
+    飛ばされた先の 404 は「robots.txt が無い」とは言えない（姉妹の競売統計が実物で決めた形）。
+    """
+    a = urllib.parse.urlsplit(url)
+    b = urllib.parse.urlsplit(saki or url)
+    return (b.scheme in ("http", "https") and b.netloc.lower() == a.netloc.lower()
+            and b.path == "/robots.txt" and not b.query)
+
+
+def robots_hantei(status, ctype, body, cenc=""):
     """robots.txt の応答から、4状態のどれかを決める。**分からないものは通さない。**
 
     返り値は (状態, 規則 or None, 理由)。
+
+    **見出し（Content-Type）ではなく中身で見る。** text/html と名乗って robots.txt を
+    返すサーバーはある（姉妹の競売統計が実物で見た）。中身が HTML でなく、規則が読めれば読む。
+    text/plain・text/html・無し 以外の見出しは読まない。圧縮されたまま返ってきたら読まない。
     """
     if status in (404, 410):
         return "通す", [], "robots.txt が HTTP %s（置いていない）" % status
@@ -345,18 +393,20 @@ def robots_hantei(status, ctype, body):
     if status is None or not (200 <= status < 300):
         return "確かめられなかった", None, "robots.txt が HTTP %s" % status
     ct = (ctype or "").split(";")[0].strip().lower()
-    if ct and ct != "text/plain":
+    if ct and ct not in ("text/plain", "text/html"):
         return "確かめられなかった", None, "robots.txt が text/plain で返らなかった（%s）" % ct
+    ce = (cenc or "").strip().lower()
+    if ce not in ("", "identity"):
+        return "確かめられなかった", None, "robots.txt が圧縮されたまま返った（%s）" % ce
     body = body or b""
     if len(body) > ROBOTS_OOKISA:
         return "確かめられなかった", None, "robots.txt が大きすぎて読みきれない"
-    atama = body.lstrip(b"\xef\xbb\xbf").lstrip()[:512].lower()
+    atama = body.lstrip(b"\xef\xbb\xbf").lstrip()[:2048].lower()
     if atama.startswith(b"<") or b"<html" in atama or b"<!doctype" in atama:
         return "確かめられなかった", None, "robots.txt のはずが HTML"
-    try:
-        text = body.decode("utf-8")
-    except UnicodeDecodeError:
-        return "確かめられなかった", None, "robots.txt が UTF-8 で読めない"
+    text, why = robots_kisoku_gyou(body)
+    if text is None:
+        return "確かめられなかった", None, why
     groups, yometa = robots_kaiseki(text)
     if yometa == 0:
         # 空のファイルもここに来る。**200 が返っただけでは許可にしない**
@@ -365,16 +415,22 @@ def robots_hantei(status, ctype, body):
 
 
 # ------------------------------------------------------------------ 門
-class _TenSouShinai(urllib.request.HTTPRedirectHandler):
+class _RobotsTenSou(urllib.request.HTTPRedirectHandler):
+    """robots.txt の転送は、**同じ相手の /robots.txt へのもの**（http → https 等）だけ辿る。"""
+    max_redirections = 5
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None                    # robots.txt の転送は辿らない（確かめられなかった）
+        if not robots_no_basho(req.full_url, newurl):
+            return None                # よその場所へは辿らない（確かめられなかった）
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class Kado:
     """1回の実行に1つ。"""
 
     def __init__(self, root, repo, ua, *, ua_tokens=None, today=None, run_id=None,
-                 env=None, transport=None, sleep=time.sleep, now=time.time):
+                 env=None, transport=None, sleep=time.sleep, now=time.time,
+                 robots_hikae=None):
         self.root = root
         self.repo = repo
         self.ua = ua
@@ -382,8 +438,13 @@ class Kado:
                                         ua.split()[0].lower()])
         self.env = os.environ if env is None else env
         self.today = today or jst_kyou(self.env)
+        if self.today is not None and _hi(self.today) is None:
+            raise ValueError("today が読めない：%r" % (self.today,))
         self.run_id = run_id or self.env.get("GITHUB_RUN_ID") or "local-%d" % os.getpid()
         self.transport = transport
+        # robots.txt の控えの置き場（金庫の中だけ）。**その日に何と書いてあったか**は
+        # 取り直せない。相手が書き換えたら、こちらの控えが唯一の記録になる
+        self.robots_hikae = robots_hikae
         self._sleep, self._now = sleep, now
         self._lock = threading.RLock()
         self._genzai = None            # いまのセッション (カードid, カード, 行為)
@@ -523,6 +584,8 @@ class Kado:
         if card is None:
             return ["カードが無い（未確認）"]
         riyuu = []
+        if self.today is None:
+            return ["今日の日付が渡されていない（RUN_DATE・hajimeru の today）。日付が要る関所を確かめられない"]
         jotai = self.seishiki(cid)
         if jotai != "取ってよい":
             why = ""
@@ -613,30 +676,65 @@ class Kado:
             return self._robots[key]
         url = "%s://%s/robots.txt" % (scheme, host)
         self._matsu(aite)              # robots.txt を見に行くのも、その相手への1観測に数える
-        handlers = [_TenSouShinai()]
+        handlers = [_RobotsTenSou()]
         if self.transport is not None:
             handlers.insert(0, self.transport)
         op = urllib.request.build_opener(*handlers)
         req = urllib.request.Request(url, headers={"User-Agent": self.ua})
-        status, ctype, body = None, "", b""
+        status, ctype, cenc, body, saki = None, "", "", b"", url
         try:
             with op.open(req, timeout=TIMEOUT) as r:
                 status, ctype = r.status, r.headers.get("Content-Type", "")
+                cenc = r.headers.get("Content-Encoding", "")
+                saki = r.geturl() or url
                 body = r.read(ROBOTS_OOKISA + 1)
         except urllib.error.HTTPError as e:
             status, ctype = e.code, e.headers.get("Content-Type", "") if e.headers else ""
+            saki = getattr(e, "url", None) or getattr(e, "filename", None) or url
         except Exception as e:                                   # noqa: BLE001
             v = ("確かめられなかった", None, None,
                  "robots.txt に届かなかった（%s）" % type(e).__name__)
             self._robots[key] = v
             return v
-        jotai, groups, why = robots_hantei(status, ctype, body)
+        if not robots_no_basho(url, saki):
+            # 転送でよその場所へ行った先の答えは、この相手の robots.txt の答えではない
+            v = ("確かめられなかった", None, None,
+                 "robots.txt が、よその場所（%s）へ転送された" % saki)
+            self._robots[key] = v
+            return v
+        if status is not None and 200 <= status < 300:
+            self._robots_wo_hikaeru(host, url, body)
+        jotai, groups, why = robots_hantei(status, ctype, body, cenc)
         rules, delay = robots_group(groups, self.tokens) if groups else ([], None)
         v = (jotai, rules if jotai == "通す" else None, delay, why)
         self._robots[key] = v
         if jotai == "混んでいる":
             self._tomeru(aite, "robots.txt が HTTP %s" % status)
         return v
+
+    def _robots_wo_hikaeru(self, host, url, body):
+        """受け取った robots.txt を、**バイトのまま**金庫の中に控える。金庫の外には書かない。
+
+        頭の2行（取得日と出どころ）は控えなので、別のファイルにせずバイトの手前に足す
+        （robots.txt は `#` が注記なので、規則とは混ざらない。姉妹の競売統計と同じ形）。
+        """
+        if not self.robots_hikae:
+            return
+        kinko = self.env.get("KINKO_DIR") or ""
+        saki = os.path.realpath(self.robots_hikae)
+        if not kinko or not (saki == os.path.realpath(kinko)
+                             or saki.startswith(os.path.realpath(kinko) + os.sep)):
+            self.kiroku.append(("", host, "控えない", "robots.txt の控えの置き場が金庫の中に無い"))
+            return
+        try:
+            os.makedirs(saki, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=saki, suffix=".tmp")
+            with os.fdopen(fd, "wb") as f:
+                f.write(("# 取得日: %s\n# %s\n" % (self.today, url)).encode("utf-8"))
+                f.write(body)
+            os.replace(tmp, os.path.join(saki, re.sub(r"[^0-9A-Za-z.-]", "_", host) + ".txt"))
+        except OSError as e:
+            self.kiroku.append(("", host, "控えない", "robots.txt を控えられなかった（%s）" % type(e).__name__))
 
     def _tomeru(self, aite, riyuu):
         self._tomatta[aite] = riyuu

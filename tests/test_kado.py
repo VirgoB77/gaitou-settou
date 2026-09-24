@@ -36,16 +36,20 @@ class Nise(urllib.request.BaseHandler):
     def __init__(self, kotae):
         self.kotae = kotae
         self.kita = []
+        self.nanori = []           # 来た要求の名乗り（User-Agent）
 
     def _open(self, req):
         self.kita.append(req.full_url)
-        status, headers, body = self.kotae.get(req.full_url, (404, {}, b""))
+        self.nanori.append(req.get_header("User-agent") or req.unredirected_hdrs.get("User-agent"))
+        kotae = self.kotae.get(req.full_url, (404, {}, b""))
+        status, headers, body = kotae[:3]
+        saki = kotae[3] if len(kotae) > 3 else req.full_url     # 相手の側で行き先が変わった形を作るとき
         if isinstance(status, Exception):
             raise status
         msg = email.message.Message()
         for k, v in headers.items():
             msg[k] = v
-        r = urllib.response.addinfourl(io.BytesIO(body), msg, req.full_url, status)
+        r = urllib.response.addinfourl(io.BytesIO(body), msg, saki, status)
         r.msg = "nise"
         return r
 
@@ -313,7 +317,7 @@ class 機械札(Oki):
     def test_札があれば通らない(self):
         self.shounin()
         for f in ("再読要", "停止要請", "使用停止", "不整合", "混雑継続",
-                  "拒否継続", "引用不一致", "指紋不安定"):
+                  "拒否継続", "引用不一致", "指紋ゆらぎ"):
             with self.subTest(f=f):
                 self.kaku("data/ref/kikai-fuda.json", {"tameshi": {"札": f}})
                 k = self.mon()
@@ -565,8 +569,133 @@ class robotsの応答(Oki):
         self.assertNotIn(saki, self.nise.kita)
         self.assertNotIn("https://other.example.com/robots.txt", self.nise.kita)
 
-    def test_robots_txt_の転送は辿らない(self):
+    def test_robots_txt_のよその場所への転送は辿らない(self):
         self.kiku((301, {"Location": "https://%s/robots2.txt" % HOST}, b""))
+        self.assertNotIn("https://%s/robots2.txt" % HOST, self.nise.kita)
+        self.setUp()
+        self.kiku((302, {"Location": "https://%s/top.html" % HOST}, b""))
+        self.assertNotIn("https://%s/top.html" % HOST, self.nise.kita)
+        self.setUp()
+        self.kiku((301, {"Location": "https://other.example.com/robots.txt"}, b""))
+        self.assertNotIn("https://other.example.com/robots.txt", self.nise.kita)
+
+    def test_答えがよその場所から返ったら読まない(self):
+        """転送の段を通らずに、答えの出どころが /robots.txt でなかった形（二重の守り）。"""
+        k = self.mon({"https://%s/robots.txt" % HOST:
+                      (200, {"Content-Type": "text/plain"}, b"User-agent: *\nAllow: /\n",
+                       "https://%s/top.html" % HOST)})
+        self.assertEqual(k._robots_toru("https", HOST, "ためし県")[0], "確かめられなかった")
+
+    def test_同じ相手のhttpからhttpsへの転送は辿って読む(self):
+        k = self.mon({"http://%s/robots.txt" % HOST: (301, {"Location": "https://%s/robots.txt" % HOST}, b""),
+                      "https://%s/robots.txt" % HOST: ROBOTS_OK})
+        jotai, rules, _, _ = k._robots_toru("http", HOST, "ためし県")
+        self.assertEqual(jotai, "通す")
+        self.assertFalse(kado.robots_yurusu(rules, "http://%s/himitsu/a" % HOST))
+        self.assertEqual(self.nise.kita, ["http://%s/robots.txt" % HOST, "https://%s/robots.txt" % HOST])
+
+    def test_同じ相手のhttpからhttpsの404は置いていないとして通す(self):
+        k = self.mon({"http://%s/robots.txt" % HOST: (301, {"Location": "https://%s/robots.txt" % HOST}, b""),
+                      "https://%s/robots.txt" % HOST: (404, {}, b"")})
+        self.assertEqual(k._robots_toru("http", HOST, "ためし県")[0], "通す")
+
+    def test_見出しがtext_htmlでも中身が規則なら読む(self):
+        st, groups, _ = kado.robots_hantei(200, "text/html; charset=utf-8", b"User-agent: *\nDisallow: /x\n")
+        self.assertEqual(st, "通す")
+        self.assertEqual(kado.robots_hantei(200, "text/html", b"<html><body>404</body></html>")[0],
+                         "確かめられなかった")
+
+    def test_圧縮されたままなら読まない(self):
+        self.assertEqual(kado.robots_hantei(200, "text/plain", b"User-agent: *\nAllow: /\n", "gzip")[0],
+                         "確かめられなかった")
+        self.assertEqual(kado.robots_hantei(200, "text/plain", b"User-agent: *\nAllow: /\n", "identity")[0],
+                         "通す")
+
+    def test_robots_txtは1回の実行で相手ごとに1回だけ_名乗って取る(self):
+        self.shounin()
+        u2 = "https://%s/data/two.html" % HOST
+        k = self.mon({"https://%s/robots.txt" % HOST: ROBOTS_OK, URL: HONBUN, u2: HONBUN})
+        k.install()
+        with k.sesshon("tameshi", hozon_saki=os.path.join(self.kinko, "raw")):
+            urllib.request.urlopen(URL, timeout=5).read()
+            urllib.request.urlopen(u2, timeout=5).read()
+        self.assertEqual(self.nise.kita.count("https://%s/robots.txt" % HOST), 1)
+        self.assertEqual(self.nise.nanori[0], UA)
+
+
+class robotsのバイト(Oki):
+    """**文字コードを選ばない。** 注記（# から後ろ）はバイトのまま落とし、規則の行だけを読む。"""
+
+    def test_ShiftJISの注記があっても規則は読める(self):
+        生 = "# 競売情報サイトのご案内\r\nUser-agent: *\r\nDisallow: /himitsu/ # 注記\r\n".encode("cp932")
+        st, groups, _ = kado.robots_hantei(200, "text/plain", 生)
+        self.assertEqual(st, "通す")
+        rules, _ = kado.robots_group(groups, {"kujiraya"})
+        self.assertFalse(kado.robots_yurusu(rules, "https://h.example/himitsu/a"))
+        self.assertTrue(kado.robots_yurusu(rules, "https://h.example/data/a"))
+
+    def test_規則の行にASCIIの外の字があれば止める(self):
+        for 生 in ("User-agent: *\nDisallow: /日本/\n".encode("cp932"),
+                   "User-agent: *\nDisallow: /日本/\n".encode("utf-8")):
+            with self.subTest(生=生):
+                self.assertEqual(kado.robots_hantei(200, "text/plain", 生)[0], "確かめられなかった")
+
+    def test_控えはバイトのまま金庫の中に残す(self):
+        self.shounin()
+        生 = "# 案内\nUser-agent: *\nDisallow: /himitsu/\n".encode("cp932")
+        hikae = os.path.join(self.kinko, "raw", "_robots")
+        self.nise = Nise({"https://%s/robots.txt" % HOST: (200, {"Content-Type": "text/plain"}, 生),
+                          URL: HONBUN})
+        k = kado.Kado(self.root, REPO, UA, env=self.env, transport=self.nise, run_id="run-h",
+                      sleep=lambda s: None, now=lambda: 1000.0, robots_hikae=hikae)
+        k.install()
+        with k.sesshon("tameshi", hozon_saki=os.path.join(self.kinko, "raw")):
+            urllib.request.urlopen(URL, timeout=5).read()
+        with open(os.path.join(hikae, HOST + ".txt"), "rb") as f:
+            oita = f.read()
+        # 頭の2行（取得日・出どころ）は控え。そのあとは受け取ったバイトそのまま
+        atama = ("# 取得日: 2026-09-25\n# https://%s/robots.txt\n" % HOST).encode("utf-8")
+        self.assertEqual(oita, atama + 生)
+
+    def test_控えの置き場が金庫の外なら書かない(self):
+        self.shounin()
+        soto = os.path.join(self.root, "data", "raw", "_robots")
+        k = kado.Kado(self.root, REPO, UA, env=self.env, transport=Nise({
+            "https://%s/robots.txt" % HOST: ROBOTS_OK, URL: HONBUN}), run_id="run-s",
+            sleep=lambda s: None, now=lambda: 1000.0, robots_hikae=soto)
+        k.install()
+        with k.sesshon("tameshi", hozon_saki=os.path.join(self.kinko, "raw")):
+            urllib.request.urlopen(URL, timeout=5).read()
+        self.assertFalse(os.path.exists(os.path.join(soto, HOST + ".txt")))
+
+
+class 日付(Oki):
+    """**門は時計を見ない。** 日付は置き場の「日付を決める1か所」から渡してもらう。"""
+
+    def test_日付が渡されていなければ止める_通信も出ない(self):
+        self.shounin()
+        self.env = {"KINKO_DIR": self.kinko, "KINKO_PRIVATE": "1"}
+        k = self.mon()
+        self.assertIsNone(k.today)
+        self.assertTrue(any("日付" in r for r in k.card_mon("tameshi")))
+        with self.assertRaises(kado.Tomeru):
+            self.toru(k)
+        self.assertEqual(self.nise.kita, [])
+
+    def test_読めないRUN_DATEは今日に倒さず落とす(self):
+        for bad in ("きのう", "2026/09/25", "20260925", "2026-13-99"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    kado.Kado(self.root, REPO, UA, env={"RUN_DATE": bad})
+        with self.assertRaises(ValueError):
+            kado.Kado(self.root, REPO, UA, env={}, today="あした")
+
+    def test_渡された日を使う(self):
+        self.shounin()
+        self.env = {"KINKO_DIR": self.kinko, "KINKO_PRIVATE": "1"}
+        k = self.mon(today="2026-09-25")
+        self.assertEqual(k.today, "2026-09-25")
+        self.assertEqual(self.toru(k), b"<html>ok</html>")
 
 
 class robots照合器(unittest.TestCase):

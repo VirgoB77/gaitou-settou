@@ -579,9 +579,18 @@ def write_manifest(observed_at, files, halted, K, error=None):
     return path, doc
 
 
+def kyou_jst():
+    """この実行の日付（日本時間）。`RUN_DATE` があればそれ（読めない値なら門が落とす）。
+
+    門（common/kado.py）は時計を見ないので、ここで1回決めて渡す。
+    """
+    return os.environ.get("RUN_DATE") or datetime.datetime.now(
+        datetime.timezone(datetime.timedelta(hours=9))).date().isoformat()
+
+
 def main():
     # 実行の最初に、門（common/kado.py）を1回だけ始める。以後の urlopen() は全部この門を通る
-    K = kado.hajimeru(str(config.ROOT), config.SITE_ID, config.USER_AGENT)
+    K = kado.hajimeru(str(config.ROOT), config.SITE_ID, config.USER_AGENT, today=kyou_jst())
     config.RAW.mkdir(parents=True, exist_ok=True)
     observed_at = now()
     files, halted, error = [], [], None
