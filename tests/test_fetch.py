@@ -654,5 +654,121 @@ class TestRobotsKeepsManners(Base):
     _orig_fetch_robots = staticmethod(fetch_data._fetch_robots)
 
 
+HTML = b"<!DOCTYPE html><html><body>...</body></html>"
+
+
+class TestUnexpectedHtml(Base):
+    """CSV・ZIP のはずの所に HTML が返ったら、その取得先にはその回もう行かない。
+
+    何の画面か（待機列・エラーページ・ログイン画面）は決めつけない。
+    見たこと（HTML が返った）だけを記録する。
+
+    **捕まえないもの。** HTML の中身が何を意味するか。見分けていない。
+    """
+
+    def hyogo_calls(self):
+        return [u for u in self.fake.calls if "web.pref.hyogo.lg.jp" in u]
+
+    def estat_calls(self):
+        return [u for u in self.fake.calls if "www.e-stat.go.jp" in u]
+
+    # 1. CSV のはずが HTML → 同じ取得先の次の CSV へ行かない
+    def test_csv_html_stops_that_host(self):
+        targets = csv_targets()
+        name, url = targets[4]
+        self.fake.override[url] = HTML
+        code, doc = self.run_once()
+        self.assertEqual(code, 1)
+        self.assertEqual(self.hyogo_calls(), [u for _, u in targets[:5]],
+                         "HTML が返った後も、同じ取得先の CSV を取りに行った")
+        self.assertEqual(self.entry(doc, name)["status"], "unexpected_html")
+        rest = [self.entry(doc, n) for n, _ in targets[5:]]
+        self.assertEqual({e["status"] for e in rest}, {"not_attempted"})
+
+    # 2. ZIP のはずが HTML → 同じ取得先の次へ行かない
+    def test_zip_html_stops_that_host(self):
+        first = config.CITIES[0]
+        self.fake.override[zip_url(first)] = HTML
+        code, doc = self.run_once()
+        self.assertEqual(code, 1)
+        self.assertEqual(self.estat_calls(), [zip_url(first)],
+                         "HTML が返った後も、同じ取得先の ZIP を取りに行った")
+        path = f"source_zip/境界_{first['name']}.zip"
+        self.assertEqual(self.entry(doc, path)["status"], "unexpected_html")
+        for c in config.CITIES[1:]:
+            self.assertEqual(self.entry(doc, f"source_zip/境界_{c['name']}.zip")["status"],
+                             "not_attempted")
+
+    # 3. 取得先 A が HTML でも、取得先 B は普通に進む
+    def test_other_host_goes_on(self):
+        self.fake.override[csv_targets()[0][1]] = HTML
+        code, doc = self.run_once()
+        self.assertEqual(len(self.hyogo_calls()), 1)
+        self.assertEqual(self.estat_calls(), [zip_url(c) for c in config.CITIES],
+                         "別の取得先まで止めた")
+        zips = [f for f in doc["files"] if f["kind"] == "estat_boundary_zip"]
+        self.assertEqual({f["status"] for f in zips}, {"ok"})
+
+    def test_zip_host_html_does_not_stop_csv_host(self):
+        self.fake.override[zip_url(config.CITIES[0])] = HTML
+        self.run_once()
+        self.assertEqual(len(self.hyogo_calls()), len(csv_targets()))
+
+    # 4. 普通の CSV・ZIP では止まらない
+    def test_normal_data_does_not_stop(self):
+        code, doc = self.run_once()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.fake.calls), self.n_targets)
+        self.assertEqual(doc["halted"], [])
+
+    def test_empty_csv_is_one_failure_not_a_stop(self):
+        """HTML でない失敗（空）は、その1本だけ。取得先ごとは止めない。"""
+        targets = csv_targets()
+        self.fake.override[targets[2][1]] = b""
+        self.run_once()
+        self.assertEqual(len(self.hyogo_calls()), len(targets))
+
+    # 5. 「待機列」とは書かない。見たことだけ
+    def test_records_only_what_was_seen(self):
+        name, url = csv_targets()[1]
+        self.fake.override[url] = HTML
+        _, doc = self.run_once()
+        e = self.entry(doc, name)
+        self.assertEqual((e["status"], e["http_status"]), ("unexpected_html", 200))
+        self.assertEqual(doc["halted"], [{"host": "police", "http_status": 200,
+                                          "reason": "unexpected_html"}])
+        text = json.dumps(doc, ensure_ascii=False).lower()
+        for guess in ("waiting", "queue", "待機", "login", "ログイン", "maintenance"):
+            self.assertNotIn(guess, text, f"記録が理由を推測している: {guess}")
+        rest = [f for f in doc["files"] if f["status"] == "not_attempted"]
+        self.assertTrue(rest)
+        self.assertTrue(all("断られた" not in f["error"] for f in rest),
+                        "HTML は断られたのではない")
+
+    # 6. やり直さない
+    def test_html_is_not_retried(self):
+        name, url = csv_targets()[3]
+        self.fake.override[url] = HTML
+        self.run_once()
+        self.assertEqual(self.fake.calls.count(url), 1)
+
+    def test_previous_data_is_kept(self):
+        self.run_once()
+        targets = csv_targets()
+        before = {n: (self.raw / n).read_bytes() for n, _ in targets}
+        self.fake.override[targets[0][1]] = HTML
+        self.run_once()
+        self.assertEqual({n: (self.raw / n).read_bytes() for n, _ in targets}, before,
+                         "HTML の回に、前回の生データを書き換えた")
+
+    def test_robots_txt_html_is_not_this(self):
+        """robots.txt が HTML で返っても、本体の HTML とは混ぜない。"""
+        self.robots.by_url[HYOGO] = (200, HTML)
+        code, doc = self.run_once()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.hyogo_calls()), len(csv_targets()))
+        self.assertEqual(doc["halted"], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -27,8 +27,10 @@ robots.txt の結果（共通仕様3.4）:
 
 **捕まえないもの。**
 
-  ・待機列。HTML が返れば1本ずつ「CSV ではない」で失敗にするが、
-    その回は続ける。待機列の画面かエラーページかを、機械では見分けていない
+  ・HTML が何の画面か。CSV・ZIP のはずの所に HTML が返ったら、その1本を
+    unexpected_html とし、**その取得先にはその回もう行かない**（429・503 と同じ道）。
+    待機列・エラーページ・ログイン画面のどれかは見分けていないし、推測もしない。
+    記録には見たことだけを書く。次の回はまた見に行く
   ・http:// を中継経由で取るとき、中継の 403 と相手の 403 は区別できない。
     取得先は https なので、中継の断りは「届かなかった」として出る
 
@@ -90,11 +92,34 @@ _last_request = 0.0
 
 
 class Halted(Exception):
-    """断られたので、その回は打ち切る。"""
+    """この取得先には、この回もう行かない。残りは次回に回す。やり直さない。
 
-    def __init__(self, code):
-        super().__init__(f"{code} が返りました。この回は中止します（次回に回す）")
+    status は観測の記録に書く名前。**理由を推測で名付けない。見たことだけを書く。**
+
+      halted           429・503 が返った
+      unexpected_html  CSV・ZIP のはずが HTML が返った（何の画面かは決めつけない）
+    """
+
+    status = "halted"
+
+    def __init__(self, code, message=None):
+        super().__init__(message or f"{code} が返りました。この回は中止します（次回に回す）")
         self.code = code
+
+
+class UnexpectedHtml(Halted):
+    """CSV・ZIP のはずが HTML が返った。
+
+    待機列かもしれないし、エラーページやログイン画面かもしれない。
+    **どれかは見分けない。** 続けて取りに行くと、待機列だった場合に押し込みになる。
+    だから 429・503 と同じく、その取得先にはこの回もう行かない。
+    """
+
+    status = "unexpected_html"
+
+    def __init__(self, expected, code=200):
+        super().__init__(code, f"{expected} のはずが HTML が返った。"
+                               "この取得先には、この回もう行かない（次回に回す）")
 
 
 class NotData(Exception):
@@ -288,13 +313,21 @@ def write_atomic(path, data):
         raise
 
 
+def is_html(body):
+    """先頭が HTML か。**CSV・ZIP のはずの本体にだけ使う。** robots.txt には使わない。"""
+    head = body[:512].lstrip().lower()
+    return head.startswith((b"<!doctype", b"<html"))
+
+
 def check_csv(body):
-    """空と HTML は CSV ではない。取れたことにしない（前回の生データを守る）。"""
+    """空と HTML は CSV ではない。取れたことにしない（前回の生データを守る）。
+
+    空はその1本だけの失敗。HTML はその取得先ごと、この回は止める（UnexpectedHtml）。
+    """
     if not body.strip():
         raise NotData("中身が空")
-    head = body[:512].lstrip().lower()
-    if head.startswith((b"<!doctype", b"<html")):
-        raise NotData("CSV ではなく HTML が返った")
+    if is_html(body):
+        raise UnexpectedHtml("CSV")
 
 
 def zip_members(data, city_code):
@@ -441,6 +474,8 @@ def observe_boundary(c):
         return robots_entry(entry, prev_zip, e)
     try:
         status, data = get(url)
+        if is_html(data):
+            raise UnexpectedHtml("ZIP")
         members = zip_members(data, c["code"])
     except Halted:
         raise
@@ -491,7 +526,8 @@ def observe_boundary(c):
 
 def not_attempted(entry):
     prev = file_sha256(config.RAW / entry["path"])
-    return failed_entry(entry, prev, "not_attempted", "この回は中止した（前の取得で断られた）")
+    return failed_entry(entry, prev, "not_attempted",
+                        "この回は行かなかった（同じ取得先の前の1本で止めた）")
 
 
 def plan():
@@ -528,8 +564,8 @@ def observe_all(files, halted):
             files.append(failed_entry(
                 {"kind": "police_csv", "url": pref.csv_url(year, teguchi),
                  "path": name, "fetched_at": now()},
-                file_sha256(config.RAW / name), "halted", str(e), e.code))
-            halted.append({"host": "police", "http_status": e.code})
+                file_sha256(config.RAW / name), e.status, str(e), e.code))
+            halted.append({"host": "police", "http_status": e.code, "reason": e.status})
 
     print("町丁目境界")
     stop = None
@@ -548,8 +584,8 @@ def observe_all(files, halted):
             stop = e
             files.append(failed_entry(dict(entry, fetched_at=now()),
                                       file_sha256(config.RAW / entry["path"]),
-                                      "halted", str(e), e.code))
-            halted.append({"host": "e-stat", "http_status": e.code})
+                                      e.status, str(e), e.code))
+            halted.append({"host": "e-stat", "http_status": e.code, "reason": e.status})
 
 
 def summarize(files):
