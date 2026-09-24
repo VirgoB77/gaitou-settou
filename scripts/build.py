@@ -73,16 +73,12 @@ def city_masu(values_by_area, pops=None):
     for li in range(len(config.TOWN_LAYERS)):
         col = [row[li] for row in values_by_area]
         totals.append(sum(col))
-        states = privacy.complement_suppress(col)
+        # 伏せる判断（1〜2件・人口の線・補完的伏せ・札そろえ）は全部この中。
+        # ここで後から足さない。足すと札そろえから外れる（#41）
+        states = privacy.complement_suppress(col, pops)
         for ai, (v, st) in enumerate(zip(col, states)):
             n[ai][li] = v if st == privacy.SHOWN else None
             w[ai][li] = st == privacy.WITHHELD
-            # 母数の側の線。**complement_suppress のあとに当てる。**
-            # 伏せる升が増えると k が増えるので、まとまりの余裕は広がる方向。
-            # 札は「非公開」。値が3以上なので「1-2」と書くと嘘になる。
-            if pops and n[ai][li] is not None and privacy.suppress_count(v, pops[ai]):
-                n[ai][li] = None
-                w[ai][li] = True
     return n, w, totals
 
 

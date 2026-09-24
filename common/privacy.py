@@ -349,18 +349,26 @@ def rate_for(n, population):
 SHOWN, SMALL, WITHHELD = "shown", "small", "withheld"
 
 
-def _pin_check(states, values, total):
-    """読者の立場で解いてみる。1〜2件の升が1つでも決まるなら True。
+def _pin_check(states, values, total, tokutei=None):
+    """読者の立場で解いてみる。**最初から伏せた升**が1つでも決まるなら True。
 
-    伏せた升の合計 total は親から引けば分かる。
-    1〜2件の升は [1,2]、追加で伏せた升は [3, 上限] の範囲を持つ。
+    伏せた升の合計 total は親から引けば分かる。範囲は読者が知りうる最も狭いもの。
+
+      1〜2件の升                      [1, 2]
+      人口の線で伏せた升（tokutei）   [3, TOKUTEI_MAX]  規則も人口も公開しているので
+      追加で伏せた升                  [3, 上限]
+
+    画面では札をそろえるので、読者はどれがどれかを知らない。ここではそれを
+    **知っている読者**で解く（厳しい側）。これで決まらなければ、そろえた後も決まらない。
     区間伝播を1本の制約に当てる。
     """
+    tokutei = tokutei or [False] * len(states)
     idx = [i for i, st in enumerate(states) if st != SHOWN]
     if not idx:
         return False
     lo = [LO_SMALL if states[i] == SMALL else BUCKET_MAX + 1 for i in idx]
-    hi = [BUCKET_MAX if states[i] == SMALL else total for i in idx]
+    hi = [BUCKET_MAX if states[i] == SMALL else TOKUTEI_MAX if tokutei[i] else total
+          for i in idx]
     for _ in range(len(idx) + 2):
         moved = False
         for j in range(len(idx)):
@@ -373,17 +381,23 @@ def _pin_check(states, values, total):
                 hi[j] = nhi; moved = True
         if not moved:
             break
-    return any(lo[j] == hi[j] for j, i in enumerate(idx) if states[i] == SMALL)
+    return any(lo[j] == hi[j] for j, i in enumerate(idx)
+               if states[i] == SMALL or tokutei[i])
 
 
 LO_SMALL = 1
 
 
-def complement_suppress(values):
-    """まとまりの中の升を、伏せるかどうかに分ける。
+def complement_suppress(values, pops=None):
+    """まとまりの中の升を、伏せるかどうかに分ける。**伏せる判断はここだけでする。**
 
     values は同じまとまり（市 × 層など）の真の件数の並び。
     親（合計）は公開しているものとして扱う。**親を出していないなら要らない。**
+
+    pops（升ごとの人口）を渡すと、人口の線（suppress_count）で伏せる3件以上の升も
+    **ここで**決める。前は build.city_masu がこの関数の**あと**で足していたので、
+    札そろえからも補完的伏せの判定からも外れていた。同じまとまりに「1-2」と
+    「非公開」が並び、「非公開」が人口の線の升（3〜TOKUTEI_MAX 件）だと読めた（#41）。
 
     戻り値は SHOWN / SMALL / WITHHELD の並び。
       SHOWN     そのまま出す
@@ -401,15 +415,20 @@ def complement_suppress(values):
     升が特定できるわけではないが、隠れる場所は多いほうがよい。
     見た目の違いは、それ自体が数字になる（共通仕様3.2）。
     """
-    states = [SMALL if masked(v) is None and v > 0 else SHOWN for v in values]
+    small = [masked(v) is None and v > 0 for v in values]
+    # 人口の線。1〜2件はもう small に入っているので、3件以上だけがここに来る
+    tokutei = [bool(pops) and not sm and v > 0 and suppress_count(v, pops[i])
+               for i, (v, sm) in enumerate(zip(values, small))]
+    states = [SMALL if sm else WITHHELD if tk else SHOWN
+              for sm, tk in zip(small, tokutei)]
     total = sum(v for v, st in zip(values, states) if st != SHOWN)
-    if not any(st == SMALL for st in states):
+    if not any(small) and not any(tokutei):
         return states                      # 伏せた升が無いので守るものが無い
 
     # 追加の候補は3件以上の升。小さいほうから。
     cand = sorted((v, i) for i, (v, st) in enumerate(zip(values, states))
                   if st == SHOWN and v > BUCKET_MAX)
-    while _pin_check(states, values, total) and cand:
+    while _pin_check(states, values, total, tokutei) and cand:
         v, i = cand.pop(0)
         states[i] = WITHHELD
         total += v

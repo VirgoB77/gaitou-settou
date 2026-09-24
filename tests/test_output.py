@@ -352,5 +352,45 @@ class TestCountsAgree(unittest.TestCase):
         self.assertEqual(missing[:3], [])
 
 
+class TestNoMixedLabels(unittest.TestCase):
+    """#41：公開しているデータで、同じまとまりに「1-2」と「非公開」が並んでいないか。
+
+    まとまり＝市 × 層（親 S＝市の升を層のぶん足したもの。引き算の単位）。
+    混ざると、補完的伏せが発動していないことが読め、「非公開」が人口の線の升
+    （3〜TOKUTEI_MAX 件）だと分かる。
+
+    **捕まえないもの。** 札がそろっていても、伏せた升が引き算で戻るかどうか。
+    それは check_small_counts が見る。
+    """
+
+    def groups(self):
+        for f in sorted(config.BUILD.glob("*.geojson")):
+            fc = json.loads(f.read_text(encoding="utf-8"))
+            for i, layer in enumerate(fc["properties"]["layers"]):
+                cells = [ft["properties"] for ft in fc["features"]]
+                yield (fc["properties"]["city"], layer["name"],
+                       sum(1 for p in cells if p["n"][i] is None and not p["w"][i]),
+                       sum(1 for p in cells if p["n"][i] is None and p["w"][i]))
+
+    def test_geojson_groups_are_not_mixed(self):
+        mixed = [(c, l, a, b) for c, l, a, b in self.groups() if a and b]
+        self.assertEqual(mixed, [], "\n  同じまとまりに「1-2」と「非公開」が並んでいる"
+                                    "（市, 層, 1-2 の升, 非公開 の升）")
+
+    def test_unified_group_has_at_least_two(self):
+        one = [(c, l) for c, l, a, b in self.groups() if b == 1 and not a]
+        self.assertEqual(one, [], "\n  伏せた升が1つだけ。親から引けば戻る")
+
+    def test_records_are_not_mixed(self):
+        d = load()
+        by = {}
+        for r in d["records"]:
+            if r["count"] is None:
+                _, city, _, layer = r["id"].split(":")
+                by.setdefault((city, layer), set()).add(r["count_label"])
+        mixed = {k: v for k, v in by.items() if len(v) > 1}
+        self.assertEqual(mixed, {}, "\n  index.json の record で札が混ざっている")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

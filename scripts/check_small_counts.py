@@ -164,6 +164,24 @@ def group_margin(fcs, idx):
             if wh:
                 # 「非公開」の札でそろえたまとまり。中に3以上の未知数が混ざるので
                 # 2件の数 m は決まらない。隠れる場所は伏せた升ぜんぶ。
+                #
+                # **ただし、そろっていることが前提。** 前はここで解くのをやめていて、
+                # 「1-2」と「非公開」が混ざったまとまりも素通りした（#41）。
+                # 混ざると、補完的伏せが発動していないことが読め、「非公開」は
+                # 人口の線の升（3〜TOKUTEI_MAX 件）だと分かる。
+                small = k - wh
+                if small:
+                    row = (P["city"], layer["name"], S, k, None,
+                           f"札が混ざっている（1-2 が {small}升・非公開 が {wh}升）")
+                    rows.append(row)
+                    bad.append(row)
+                    continue
+                if k == 1:
+                    # そろえても1升なら、親から引けばその升が出る
+                    row = (P["city"], layer["name"], S, k, None, "伏せた升が1つだけ")
+                    rows.append(row)
+                    bad.append(row)
+                    continue
                 rows.append((P["city"], layer["name"], S, k, None,
                              f"札をそろえた {wh}升（m は決まらない）"))
                 continue
@@ -447,7 +465,10 @@ def main():
         print(f"   {city:<8}{name:<12}{S:>8,}{k:>9}"
               f"{('—' if m_ is None else m_):>7}  {note}")
     if bad:
-        print("   ★ 余裕が0のまとまりがある。補完的伏せが要る（共通仕様3.2）。")
+        # 鳴った理由ごとに直し方が違う。まとめて「補完的伏せが要る」と言わない
+        print("   ★ 伏せた升が戻る形のまとまりがある（共通仕様3.2）。上の行の理由を見ること。")
+        print("      余裕0・伏せた升が1つ → 補完的伏せが要る")
+        print("      札が混ざっている     → 札をそろえる（privacy.complement_suppress）")
     if thin:
         print(f"   ▲ 余裕が細いまとまりが {len(thin)} 件ある（k の {THIN:.0%} 未満）。")
         print("      まだ崩れていないが、市や年を足すと崩れる側にある。")
