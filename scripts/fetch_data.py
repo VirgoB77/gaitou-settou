@@ -4,6 +4,36 @@
 同時接続は1本、間隔は5秒以上、429/503 が返ったらその回は中止して次回に回す。
 押し込まない。回り込まない。
 
+**本体を取りに行く前に、そのホストの robots.txt を見る。** 拒否されていたら取らない。
+robots.txt はホストごとに1回の実行で1度だけ取る（56本の CSV は同じホスト）。
+転送（redirect）で別の場所へ行くときも、転送先を robots.txt で確かめる。
+転送で拒否をすり抜けない。
+
+robots.txt の結果（共通仕様3.4）:
+
+    相手が答えた
+      2xx        中身を読む。中身が止めていれば取らない
+      404・410   置いていない。robots.txt の上では制限がない
+      401・403   相手が robots.txt を見せない。取らない
+      429・503   断られた。本体と同じく、その回は中止して次回に回す
+      上のどれでもない（400・405・451、ほかの4xx・5xx）
+                 **止めていないと確かめられない。この回は取らない。**
+                 「通してよい」と決まっていない状態を、推測で通さない
+    こちらから届かなかった（通信・中継・時間切れ）
+                 **相手の答えではない。記録で分ける。** この回は取らない
+
+**robots.txt が止めていないことは、取ってよいことを意味しない。**
+規約・公開条件の判断は別（共通仕様3.4）。ここが見るのは robots.txt だけ。
+
+**捕まえないもの。**
+
+  ・HTML が何の画面か。CSV・ZIP のはずの所に HTML が返ったら、その1本を
+    unexpected_html とし、**その取得先にはその回もう行かない**（429・503 と同じ道）。
+    待機列・エラーページ・ログイン画面のどれかは見分けていないし、推測もしない。
+    記録には見たことだけを書く。次の回はまた見に行く
+  ・http:// を中継経由で取るとき、中継の 403 と相手の 403 は区別できない。
+    取得先は https なので、中継の断りは「届かなかった」として出る
+
 **毎回、設定したものを全部取りに行く。** 手元に同じ名前のファイルがあっても飛ばさない。
 飛ばすと、配布元が同じ名前のまま中身を差し替えたときに気づけない。
 取れた中身は前回の生データと比べて、
@@ -41,7 +71,9 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import urllib.robotparser
 import zipfile
 from pathlib import Path
 
@@ -60,28 +92,189 @@ _last_request = 0.0
 
 
 class Halted(Exception):
-    """断られたので、その回は打ち切る。"""
+    """この取得先には、この回もう行かない。残りは次回に回す。やり直さない。
 
-    def __init__(self, code):
-        super().__init__(f"{code} が返りました。この回は中止します（次回に回す）")
+    status は観測の記録に書く名前。**理由を推測で名付けない。見たことだけを書く。**
+
+      halted           429・503 が返った
+      unexpected_html  CSV・ZIP のはずが HTML が返った（何の画面かは決めつけない）
+    """
+
+    status = "halted"
+
+    def __init__(self, code, message=None):
+        super().__init__(message or f"{code} が返りました。この回は中止します（次回に回す）")
         self.code = code
+
+
+class UnexpectedHtml(Halted):
+    """CSV・ZIP のはずが HTML が返った。
+
+    待機列かもしれないし、エラーページやログイン画面かもしれない。
+    **どれかは見分けない。** 続けて取りに行くと、待機列だった場合に押し込みになる。
+    だから 429・503 と同じく、その取得先にはこの回もう行かない。
+    """
+
+    status = "unexpected_html"
+
+    def __init__(self, expected, code=200):
+        super().__init__(code, f"{expected} のはずが HTML が返った。"
+                               "この取得先には、この回もう行かない（次回に回す）")
 
 
 class NotData(Exception):
     """HTTP では成功したが、中身が期待した形ではない（エラーページなど）。"""
 
 
-def get(url):
-    """1本ずつ、5秒以上あけて取りに行く。(HTTP の状態, 中身) を返す。"""
+class RobotsStop(Exception):
+    """robots.txt の都合で、本体へ行かない。回り込まない。
+
+    status は観測の記録に書く名前。**相手の答えと、こちらの都合を分ける。**
+
+      robots_disallowed   相手の robots.txt の中身が止めている
+      robots_refused      相手が robots.txt を 401・403 で見せない
+      robots_unusable     相手は答えたが、止めていないと確かめられない応答
+      robots_unreachable  **こちらから届かなかった。相手の答えではない**
+    """
+
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+class RobotsDenied(RobotsStop):
+    """相手が止めている（中身・401・403）。"""
+
+
+class RobotsUnknown(RobotsStop):
+    """止めていないと確かめられない（相手の応答が根拠にならない／届かない）。"""
+
+
+# この回に見た robots.txt。ホストごとに1つ。main() が回の頭で空にする。
+#   キー  "https://ホスト"
+#   値    (記録, 判定器)。判定器が None なら確かめられなかった
+_robots = {}
+
+
+def _pace():
+    """前の要求から5秒以上あける。robots.txt も本体も、同じ時計で数える。"""
     global _last_request
     wait = config.REQUEST_INTERVAL - (time.monotonic() - _last_request)
     if wait > 0:
         time.sleep(wait)
     _last_request = time.monotonic()
 
+
+def _fetch_robots(url):
+    """robots.txt を1本取る。(HTTP の状態, 中身) を返す。
+
+    4xx・5xx は例外にせず状態で返す（判断は robots_for がする）。
+    通信できないときだけ例外。robots.txt 自体は robots の対象外なので、
+    転送はそのまま従う。やり直しはしない。
+    """
+    _pace()
     req = urllib.request.Request(url, headers=HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=120) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        e.close()
+        return e.code, b""
+
+
+def robots_for(url):
+    """url のホストの robots.txt を、この回で1度だけ見る。(記録, 判定器)。"""
+    parts = urllib.parse.urlsplit(url)
+    key = f"{parts.scheme}://{parts.netloc}"
+    if key in _robots:
+        return _robots[key]
+    robots_url = f"{key}/robots.txt"
+    # reached … 相手が HTTP で答えたか。False はこちらの都合（通信・中継・時間切れ）
+    rec = {"url": robots_url, "checked_at": now(), "reached": None, "http_status": None,
+           "result": None, "sha256": None, "crawl_delay": None, "error": None}
+    rp = urllib.robotparser.RobotFileParser(robots_url)
+    try:
+        status, body = _fetch_robots(robots_url)
+    except Exception as e:
+        # **こちらから届かなかった。** 中継が CONNECT を断った（403 を含む）ときもここ。
+        # 相手の 403 とは記録を分ける（共通仕様3.4）
+        rec.update(reached=False, result="unreachable", error=f"{type(e).__name__}: {e}")
+        rp = None
+    else:
+        rec.update(reached=True, http_status=status)
+        if status in (429, 503):
+            rec["result"] = "halted"
+            rp = None
+        elif 200 <= status < 300:
+            rp.parse(body.decode("utf-8", errors="replace").splitlines())
+            rec.update(result="parsed", sha256=sha256(body),
+                       crawl_delay=rp.crawl_delay(config.USER_AGENT))
+        elif status in (404, 410):
+            rp.allow_all = True
+            rec["result"] = "not_found"
+        elif status in (401, 403):
+            rp.disallow_all = True
+            rec["result"] = "refused"
+        else:
+            # 400・405・451、ほかの4xx・5xx。「通してよい」と決まっていない
+            rec["result"] = "unusable"
+            rp = None
+    _robots[key] = (rec, rp)
+    return _robots[key]
+
+
+def check_robots(url):
+    """robots.txt が止めていないかを確かめる。止めている・確かめられないなら例外。
+
+    **通っても「取ってよい」ではない。** 規約・公開条件は別の判断（共通仕様3.4）。
+    robots.txt に 429・503 → Halted（本体と同じ扱い。その回は中止）。
+    **別の URL・別のホスト・http への言い換えで取り直さない。**
+    """
+    rec, rp = robots_for(url)
+    r, code = rec["result"], rec["http_status"]
+    if r == "halted":
+        raise Halted(code)
+    if r == "unreachable":
+        raise RobotsUnknown("robots_unreachable",
+                            f"{rec['url']} に届かなかった（こちら側：{rec['error']}）")
+    if r == "unusable":
+        raise RobotsUnknown("robots_unusable",
+                            f"{rec['url']} が HTTP {code} を返した。止めていないと確かめられない")
+    if r == "refused":
+        raise RobotsDenied("robots_refused", f"{rec['url']} を相手が HTTP {code} で見せない")
+    if not rp.can_fetch(config.USER_AGENT, url):
+        raise RobotsDenied("robots_disallowed", f"{rec['url']} の中身が止めている")
+
+
+class _RobotsRedirect(urllib.request.HTTPRedirectHandler):
+    """転送先も robots.txt で確かめる。**転送で拒否をすり抜けない。**"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        before = _last_request
+        try:
+            check_robots(newurl)
+        except BaseException:
+            fp.close()
+            raise
+        if _last_request != before:
+            _pace()      # 転送先の robots.txt を取った直後に、本体へ行かない
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_opener = urllib.request.build_opener(_RobotsRedirect)
+
+
+def get(url):
+    """1本ずつ、5秒以上あけて取りに行く。(HTTP の状態, 中身) を返す。
+
+    先に robots.txt を確かめる（この回で見ていれば手元の判定だけで、通信はしない）。
+    転送先も確かめる（_RobotsRedirect）。やり直しはしない。
+    """
+    check_robots(url)
+    _pace()
+    req = urllib.request.Request(url, headers=HEADERS)
+    try:
+        with _opener.open(req, timeout=120) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         if e.code in (429, 503):
@@ -120,13 +313,21 @@ def write_atomic(path, data):
         raise
 
 
+def is_html(body):
+    """先頭が HTML か。**CSV・ZIP のはずの本体にだけ使う。** robots.txt には使わない。"""
+    head = body[:512].lstrip().lower()
+    return head.startswith((b"<!doctype", b"<html"))
+
+
 def check_csv(body):
-    """空と HTML は CSV ではない。取れたことにしない（前回の生データを守る）。"""
+    """空と HTML は CSV ではない。取れたことにしない（前回の生データを守る）。
+
+    空はその1本だけの失敗。HTML はその取得先ごと、この回は止める（UnexpectedHtml）。
+    """
     if not body.strip():
         raise NotData("中身が空")
-    head = body[:512].lstrip().lower()
-    if head.startswith((b"<!doctype", b"<html")):
-        raise NotData("CSV ではなく HTML が返った")
+    if is_html(body):
+        raise UnexpectedHtml("CSV")
 
 
 def zip_members(data, city_code):
@@ -193,6 +394,11 @@ def replace_dir(dest, data):
     shutil.rmtree(old, ignore_errors=True)
 
 
+def robots_entry(entry, prev_sha, e):
+    """robots.txt で取らなかった1本の記録。本体には行っていない。"""
+    return failed_entry(entry, prev_sha, e.status, str(e))
+
+
 def failed_entry(entry, prev_sha, status, err, http_status=None):
     entry.update({
         "status": status,
@@ -212,11 +418,20 @@ def observe_csv(pref, year, teguchi):
     url = pref.csv_url(year, teguchi)
     prev = file_sha256(out)
     entry = {"kind": "police_csv", "url": url, "path": rel(out), "fetched_at": now()}
+    # **本体の前に robots.txt。** 拒否・不明なら get を呼ばない
+    try:
+        check_robots(url)
+    except RobotsStop as e:
+        print(f"  取らない {name}  {e}")
+        return robots_entry(entry, prev, e)
     try:
         status, body = get(url)
         check_csv(body)
     except Halted:
         raise
+    except RobotsStop as e:     # 転送先で拒否・不明
+        print(f"  取らない {name}  {e}")
+        return robots_entry(entry, prev, e)
     except urllib.error.HTTPError as e:
         print(f"  失敗 {name}  HTTP {e.code}")
         return failed_entry(entry, prev, "failed", f"HTTP {e.code}", e.code)
@@ -251,11 +466,22 @@ def observe_boundary(c):
     prev_zip = file_sha256(zip_path)
     entry = {"kind": "estat_boundary_zip", "url": url, "path": rel(zip_path),
              "extracted_to": rel(dest), "fetched_at": now()}
+    # **本体の前に robots.txt。** 拒否・不明なら get を呼ばない
+    try:
+        check_robots(url)
+    except RobotsStop as e:
+        print(f"  取らない {label}  {e}")
+        return robots_entry(entry, prev_zip, e)
     try:
         status, data = get(url)
+        if is_html(data):
+            raise UnexpectedHtml("ZIP")
         members = zip_members(data, c["code"])
     except Halted:
         raise
+    except RobotsStop as e:     # 転送先で拒否・不明
+        print(f"  取らない {label}  {e}")
+        return robots_entry(entry, prev_zip, e)
     except urllib.error.HTTPError as e:
         print(f"  失敗 {label}  HTTP {e.code}")
         return failed_entry(entry, prev_zip, "failed", f"HTTP {e.code}", e.code)
@@ -300,7 +526,8 @@ def observe_boundary(c):
 
 def not_attempted(entry):
     prev = file_sha256(config.RAW / entry["path"])
-    return failed_entry(entry, prev, "not_attempted", "この回は中止した（前の取得で断られた）")
+    return failed_entry(entry, prev, "not_attempted",
+                        "この回は行かなかった（同じ取得先の前の1本で止めた）")
 
 
 def plan():
@@ -337,8 +564,8 @@ def observe_all(files, halted):
             files.append(failed_entry(
                 {"kind": "police_csv", "url": pref.csv_url(year, teguchi),
                  "path": name, "fetched_at": now()},
-                file_sha256(config.RAW / name), "halted", str(e), e.code))
-            halted.append({"host": "police", "http_status": e.code})
+                file_sha256(config.RAW / name), e.status, str(e), e.code))
+            halted.append({"host": "police", "http_status": e.code, "reason": e.status})
 
     print("町丁目境界")
     stop = None
@@ -357,8 +584,8 @@ def observe_all(files, halted):
             stop = e
             files.append(failed_entry(dict(entry, fetched_at=now()),
                                       file_sha256(config.RAW / entry["path"]),
-                                      "halted", str(e), e.code))
-            halted.append({"host": "e-stat", "http_status": e.code})
+                                      e.status, str(e), e.code))
+            halted.append({"host": "e-stat", "http_status": e.code, "reason": e.status})
 
 
 def summarize(files):
@@ -383,6 +610,8 @@ def write_manifest(observed_at, files, halted, error=None):
             ("run_id", "GITHUB_RUN_ID"),
             ("commit", "GITHUB_SHA"))},
         "halted": halted,
+        # この回に見た robots.txt（ホストごとに1つ）。全文は残さず、指紋だけ
+        "robots": [rec for rec, _ in _robots.values()],
         "error": error,
         "targets": len(files),
         "summary": summarize(files),
@@ -400,6 +629,7 @@ def write_manifest(observed_at, files, halted, error=None):
 
 
 def main():
+    _robots.clear()   # robots.txt は回ごとに見直す。前の回の答えを持ち越さない
     config.RAW.mkdir(parents=True, exist_ok=True)
     observed_at = now()
     files, halted, error = [], [], None
