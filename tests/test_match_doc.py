@@ -64,8 +64,16 @@ class TestHandWrittenSurvives(Base):
 
     def test_template_notes_are_not_published(self):
         out = self.build_once()
-        self.assertNotIn("<!--", out)
+        self.assertTrue(out.startswith(build.GENERATED_NOTE), "生成物の頭に「生成物」の注記が無い")
+        self.assertEqual(out.count("<!--"), 1, "正本の注釈が生成物に漏れた")
         self.assertNotIn("正本", out, "正本の注釈が生成物に漏れた")
+
+    def test_generated_note_points_to_template(self):
+        """生成物の注記が指す「直す場所」が、本当に build の読む正本であること。"""
+        paths = re.findall(r"scripts/\S+?\.md", build.GENERATED_NOTE)
+        self.assertEqual(paths, ["scripts/突合率.template.md"])
+        self.assertEqual(ROOT / paths[0], build.MATCH_DOC_TEMPLATE)
+        self.assertTrue((ROOT / paths[0]).exists())
 
 
 class TestNumbersAreGenerated(Base):

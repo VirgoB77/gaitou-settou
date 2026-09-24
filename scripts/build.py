@@ -360,6 +360,10 @@ def not_counted_of(match):
 MATCH_DOC_TEMPLATE = config.ROOT / "scripts" / "突合率.template.md"
 MATCH_DOC = config.ROOT / "docs" / "突合率.md"
 _SASHIKOMI = re.compile(r"\{\{[^{}]*\}\}")
+# 生成物の頭に置く。手で直そうとした人が、直す場所を開いたその場で分かるように。
+# 生成物を手で直すと検査が落ち、月次は取得の前の検査で止まる（黙っては消えないが、止まる）
+GENERATED_NOTE = ("<!-- このファイルは scripts/build.py が作る。手で直しても次の build で消える。"
+                  "直すときは scripts/突合率.template.md を直す -->\n")
 
 
 def render_match_doc(match, template):
@@ -367,7 +371,7 @@ def render_match_doc(match, template):
 
     差し込む所は2種類。**正本に無ければ止める。**消えた差し込みは、
     数が黙って消えることになる。埋まらずに残った差し込みがあっても止める。
-    正本の頭の注釈（<!-- … -->）は、生成物には出さない。
+    正本の頭の注釈（<!-- … -->）は、生成物には出さない。代わりに GENERATED_NOTE を置く。
     """
     body = re.sub(r"\A\s*<!--.*?-->\s*\n", "", template, count=1, flags=re.S)
     rows = ["| 市 | 突合できなかった割合 |", "|---|---:|"]
@@ -386,7 +390,7 @@ def render_match_doc(match, template):
     left = _SASHIKOMI.findall(body)
     if left:
         raise ValueError(f"埋まらない差し込みが残っている: {left}")
-    return body
+    return GENERATED_NOTE + body
 
 
 def write_match_doc(match, template_path=None, out_path=None):
