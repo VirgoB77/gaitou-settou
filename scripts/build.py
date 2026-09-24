@@ -14,6 +14,7 @@
 
 import datetime as dt
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -348,6 +349,54 @@ def write_suppress_report(fcs, city_teguchi):
     print(f"伏せた理由の記録  data/build/suppress-report.md（公開しない）")
 
 
+def not_counted_of(match):
+    """数えなかったものを箱ごとに足す。index.json と docs/突合率.md が同じ数を使う。"""
+    return {h: sum(m["hako"].get(h, 0) for m in match) for h in police.HAKO}
+
+
+# docs/突合率.md は**生成物**。人が書く正本は別の場所に置く（#43）。
+# 前は build が文面ごと書いていて、手で直した docs/突合率.md を毎回戻していた。
+# 戻る中身には、公開側から外すと決めた文も入っていた。
+MATCH_DOC_TEMPLATE = config.ROOT / "scripts" / "突合率.template.md"
+MATCH_DOC = config.ROOT / "docs" / "突合率.md"
+_SASHIKOMI = re.compile(r"\{\{[^{}]*\}\}")
+
+
+def render_match_doc(match, template):
+    """正本（template）に、この回の数を差し込む。文面には触らない。
+
+    差し込む所は2種類。**正本に無ければ止める。**消えた差し込みは、
+    数が黙って消えることになる。埋まらずに残った差し込みがあっても止める。
+    正本の頭の注釈（<!-- … -->）は、生成物には出さない。
+    """
+    body = re.sub(r"\A\s*<!--.*?-->\s*\n", "", template, count=1, flags=re.S)
+    rows = ["| 市 | 突合できなかった割合 |", "|---|---:|"]
+    for m in match:
+        rows.append(f'| {m["city"]} | {m["unmatched"] / m["rows"] * 100:.2f}% |')
+    tot_r = sum(m["rows"] for m in match)
+    tot_u = sum(m["unmatched"] for m in match)
+    rows.append(f"| **合計** | **{tot_u / tot_r * 100:.2f}%** |")
+    fill = {"{{割合の表}}": "\n".join(rows)}
+    for h, n in not_counted_of(match).items():
+        fill["{{数えなかったもの." + h + "}}"] = str(n)
+    for key, val in fill.items():
+        if body.count(key) != 1:
+            raise ValueError(f"正本に差し込み {key} が {body.count(key)} 個ある。1個のはず")
+        body = body.replace(key, val)
+    left = _SASHIKOMI.findall(body)
+    if left:
+        raise ValueError(f"埋まらない差し込みが残っている: {left}")
+    return body
+
+
+def write_match_doc(match, template_path=None, out_path=None):
+    """docs/突合率.md を正本から作る。**正本には書かない。**"""
+    template_path = template_path or MATCH_DOC_TEMPLATE
+    out_path = out_path or MATCH_DOC
+    out_path.write_text(render_match_doc(match, template_path.read_text(encoding="utf-8")),
+                        encoding="utf-8")
+
+
 def cross_site_index(fcs, city_teguchi, match):
     """横断用の index.json（共通仕様6節）をサイトルートに出す。
 
@@ -443,8 +492,7 @@ def cross_site_index(fcs, city_teguchi, match):
         #
         # 市ごとには出さない。市×層の親になり、伏せた升の引き算に使える
         # （`docs/突合率.md` が行数そのものを書かないのと同じ理由）。
-        "not_counted": {h: sum(m["hako"].get(h, 0) for m in match)
-                        for h in police.HAKO},
+        "not_counted": not_counted_of(match),
     }
 
 
@@ -473,20 +521,10 @@ def main():
     write_suppress_report(fcs, totals)
 
     # 突合率は割合だけを docs に出す。行数（市×年の全件数）は公開物に書かない。
-    lines = ["# 突合率", "",
-             "県警CSVの住所を町丁目の区画に突き合わせた結果。",
-             "CLAUDE.md 8節の判断基準は「1%未満」。",
-             "",
-             "行数そのものは書かない。市×全手口×年の合計になり、",
-             "`index.json` の公開値を引くと伏せた升が戻るため（共通仕様3.2）。",
-             "突き合わせできなかった行は `data/build/unmatched.csv` に理由つきで残している。",
-             "", "| 市 | 突合できなかった割合 |", "|---|---:|"]
-    for m in match:
-        lines.append(f'| {m["city"]} | {m["unmatched"] / m["rows"] * 100:.2f}% |')
+    # 文面は正本（scripts/突合率.template.md）が持つ。ここは数を差し込むだけ（#43）
+    write_match_doc(match)
     tot_r = sum(m["rows"] for m in match)
     tot_u = sum(m["unmatched"] for m in match)
-    lines += [f'| **合計** | **{tot_u / tot_r * 100:.2f}%** |', ""]
-    (config.ROOT / "docs" / "突合率.md").write_text("\n".join(lines), encoding="utf-8")
 
     # 横断用（共通仕様6節）
     idx = cross_site_index(fcs, totals, match)
