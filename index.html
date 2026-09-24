@@ -167,7 +167,7 @@
   <div class="legend">
     <div class="bar" id="legend-bar" aria-hidden="true"></div>
     <p class="na"><i class="sw-hatch"></i><span id="legend-hatch">1〜2件の町丁目（実数を出していません）</span></p>
-    <p class="na" id="legend-wh-row"><i class="sw-wh"></i><span id="legend-wh">ほかの町丁目を守るため、実数を出していない町丁目</span></p>
+    <p class="na" id="legend-wh-row"><i class="sw-wh"></i><span id="legend-wh">実数を出していない町丁目（こちらの判断で、まとめて伏せています）</span></p>
     <p class="na" id="legend-none-row"><i class="sw-none"></i><span id="legend-none">人口500人未満、または1〜2件のため、人口千人あたりの値を<b>伏せている</b>町丁目</span></p>
     <p class="na" id="legend-nopop-row"><i class="sw-nopop"></i><span>人口が0のため、人口千人あたりの値を<b>出せない</b>町丁目（住んでいる人がいない区画）</span></p>
   </div>
@@ -371,7 +371,7 @@ function drawLegend() {
     // 注記も同じ条件で出す。実在しない札の読み方を常時出さない。
     $("note-wh").hidden = !anyWh;
   $("legend-wh").textContent =
-    "実数を出していない町丁目（ほかの町丁目を守るため、まとめて伏せています）";
+    "実数を出していない町丁目（こちらの判断で、まとめて伏せています）";
   $("legend-none-row").style.display = isTotal ? "none" : "";
   $("legend-nopop-row").style.display = isTotal ? "none" : "";
   $("legend-none").textContent =
@@ -434,10 +434,11 @@ function showArea(p) {
   const avg = P.city_rate[layer];
   const tot = shownTotal(p.n);
 
-  // 伏せた理由を取り違えない。補完的伏せの升は件数が3件以上あり、
-  // 「人口または件数が小さい」は当てはまらない。
+  // 「非公開」の理由は書かない。札をまとまり単位でそろえているので、中には
+  // 1〜2件の升も、人口の線の升も、補完的に伏せた升も混ざる。理由を書くと
+  // どれかを言い当て、札をそろえた意味が消える（#41）。
   const rateNote = wh
-    ? '<p class="sub">ほかの町丁目を守るため、この町丁目の数字は出していません</p>'
+    ? '<p class="sub">こちらの判断で、この町丁目の数字は出していません</p>'
     : r === null && !p.jinko
     ? '<p class="sub">住んでいる人がいないため、人口千人あたりの値は出せません</p>'
     : r === null

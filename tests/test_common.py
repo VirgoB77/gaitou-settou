@@ -363,5 +363,120 @@ class TestSuppressCount(unittest.TestCase):
         self.assertNotEqual(privacy.TOKUTEI_FLOOR, privacy.MIN_POPULATION)
 
 
+class TestFudaSoroe41(unittest.TestCase):
+    """#41：同じまとまりに「1-2」と「非公開」を並べない。人口の線も同じ判定に入れる。
+
+    数字はすべて作り物。人口 900 は線の外、26 は線の中（TOKUTEI_FLOOR 未満）。
+
+    **捕まえないもの。** 札を分けることで漏れる範囲のうち、この関数の外で
+    足した伏せ方（ここを通らない経路）。build.city_masu が全部ここを通すことは
+    TestCityMasuGoesThroughOnePlace が見る。
+    """
+
+    P = privacy
+
+    def labels(self, values, pops):
+        st = self.P.complement_suppress(values, pops)
+        return [v if x == self.P.SHOWN else ("1-2" if x == self.P.SMALL else "非公開")
+                for v, x in zip(values, st)]
+
+    def hidden_labels(self, values, pops):
+        return {x for x in self.labels(values, pops) if isinstance(x, str)}
+
+    # 1. 混在していた形 → 札がそろい、「非公開」を 3〜5件と読めない
+    def test_mixed_group_is_unified(self):
+        v, pop = [1, 2, 4, 30, 40, 50], [900, 900, 26, 900, 900, 900]
+        self.assertEqual(self.labels(v, pop), ["非公開", "非公開", "非公開", 30, 40, 50])
+        self.assertEqual(self.hidden_labels(v, pop), {"非公開"},
+                         "「1-2」と「非公開」が同じまとまりに並んでいる")
+
+    def test_reader_cannot_tell_which_is_small_population(self):
+        """そろえた後は、伏せた升の範囲が札からは分からない（1〜2 と 3〜5 が同じ札）。"""
+        a = self.labels([1, 2, 4, 30, 40, 50], [900, 900, 26, 900, 900, 900])
+        b = self.labels([2, 1, 5, 30, 40, 50], [900, 900, 26, 900, 900, 900])
+        self.assertEqual(a, b, "伏せた升の中身が違っても、画面は同じでなければならない")
+
+    # 2. 補完的伏せが要る形 → 足される
+    def test_single_small_population_cell_gets_a_partner(self):
+        """人口の線の升が1つだけ（k=1）なら、親から引けばその升が出る。1つ足す。"""
+        v, pop = [4, 30, 40, 50], [26, 900, 900, 900]
+        got = self.labels(v, pop)
+        self.assertEqual(sum(1 for x in got if x == "非公開"), 2)
+        self.assertEqual(got[1], "非公開", "足すのは残りのうち一番小さい升")
+        self.assertEqual(got[2:], [40, 50])
+
+    def test_old_order_would_leak(self):
+        """前の順番（伏せた後で人口の線を足す）なら、この形は親から引いて戻った。"""
+        v = [4, 30, 40, 50]
+        old = self.P.complement_suppress(v)                  # 人口を渡さない＝前の形
+        self.assertEqual(old, [self.P.SHOWN] * 4, "前は補完的伏せが走らなかった")
+        # 前は build 側でこの1升だけ伏せた → 親 124 − 見せた 120 = 4 で戻る
+        self.assertEqual(sum(v) - sum(v[1:]), v[0])
+
+    # 3. 補完的伏せが要らない形 → 余計に隠さない
+    def test_no_extra_cells_when_not_needed(self):
+        v, pop = [1, 2, 4, 30, 40, 50], [900, 900, 26, 900, 900, 900]
+        shown = [x for x in self.labels(v, pop) if not isinstance(x, str)]
+        self.assertEqual(shown, [30, 40, 50], "見せてよい升まで隠した")
+
+    def test_group_without_small_population_keeps_1_2(self):
+        """人口の線の升が無いまとまりは「1-2」のまま。余計にそろえない。"""
+        v, pop = [1, 2, 30, 40, 50], [900] * 5
+        self.assertEqual(self.labels(v, pop), ["1-2", "1-2", 30, 40, 50])
+
+    def test_without_pops_behaves_as_before(self):
+        """人口を渡さない呼び方（市の升など）は、前とまったく同じ。"""
+        for v in ([1, 2, 30, 40, 50], [9, 7, 5], [9, 7, 1, 5], [1, 1, 30]):
+            with self.subTest(v=v):
+                self.assertEqual(self.P.complement_suppress(v),
+                                 self.P.complement_suppress(v, None))
+
+    # 4. 閾値の前後
+    def test_thresholds(self):
+        base = [30, 40, 50]
+        F, M = self.P.TOKUTEI_FLOOR, self.P.TOKUTEI_MAX
+        cases = [
+            ((3, F - 1), True,  "人口が線の1つ下・3件"),
+            ((3, F),     False, "人口がちょうど線・3件"),
+            ((M, 26),    True,  "件数がちょうど上限"),
+            ((M + 1, 26), False, "件数が上限の1つ上"),
+            ((3, 0),     False, "人口0（住民がいない）"),
+            ((28, 4),    False, "件数が人口を超える"),
+            ((2, 900),   True,  "2件は人口によらず伏せる"),
+            ((0, 26),    False, "0件は伏せない"),
+        ]
+        for (n, pop), hidden, why in cases:
+            with self.subTest(why=why):
+                got = self.labels([n] + base, [pop] + [900] * 3)[0]
+                self.assertEqual(isinstance(got, str), hidden, why)
+
+
+class TestCityMasuGoesThroughOnePlace(unittest.TestCase):
+    """build.city_masu は、伏せる判断を privacy.complement_suppress の1か所に任せる。
+
+    前は complement_suppress のあとで人口の線を足していて、札そろえから外れた（#41）。
+    **捕まえないもの。** city_masu 以外の経路。件数を書き出す経路はほかに作らない決まり。
+    """
+
+    def test_city_masu_output_is_unified(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        import build
+        vals = [[1, 0], [2, 0], [4, 0], [30, 0], [40, 0], [50, 0]]   # 作り物
+        pops = [900, 900, 26, 900, 900, 900]
+        n, w, _ = build.city_masu(vals, pops)
+        col = [(n[i][0], w[i][0]) for i in range(len(vals))]
+        hidden = [ww for nn, ww in col if nn is None]
+        self.assertEqual(len(hidden), 3)
+        self.assertTrue(all(hidden), "伏せた升の札がそろっていない")
+        self.assertEqual([nn for nn, _ in col if nn is not None], [30, 40, 50])
+
+    def test_no_suppression_after_the_one_place(self):
+        """complement_suppress のあとで、升を伏せ直していないこと（ソースを読む）。"""
+        src = (Path(__file__).resolve().parent.parent / "scripts" / "build.py").read_text(encoding="utf-8")
+        body = src[src.index("def city_masu"):src.index("def add_neighbors")]
+        after = body[body.index("complement_suppress("):]
+        self.assertNotIn("suppress_count", after, "伏せる判断が2か所に分かれている")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
