@@ -45,6 +45,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+          # 承認（data/ref/shounin/）の出どころを git の履歴で確かめる（common/kado.py）。
+          # 浅い（shallow）ままだと、承認を数えられない
+          fetch-depth: 0
 
       # 共通仕様9節「2本のリポジトリ」。生データ（県警CSV・e-Statの境界）は private の金庫に置き、
       # ここには伏せ処理を通した結果とページだけを残す。
@@ -77,6 +80,11 @@ jobs:
               *)   echo "金庫の見え方を確かめられなかった（HTTP ${code:-なし}）。止まる"; exit 1 ;;
             esac
             echo "金庫の形で動く"
+            # ここ（確かめが通った、その成功の道だけ）で、門（common/kado.py）に
+            # 金庫の場所を渡す。確かめられなかった道では書かない（次の checkout の前でも、
+            # $GITHUB_ENV の値そのものは今書いてよい。参照するのはあとの段）
+            echo "KINKO_DIR=${GITHUB_WORKSPACE}/_raw" >> "$GITHUB_ENV"
+            echo "KINKO_PRIVATE=1" >> "$GITHUB_ENV"
           else
             echo "鍵が無い。生データを取りに行くと public に載るので、取りに行かずに止まる。"
             echo "Secret RAW_DEPLOY_KEY を入れる（docs/公開用リポジトリの作り方.md）"
@@ -90,6 +98,7 @@ jobs:
           ref: main
           ssh-key: ${{ secrets.RAW_DEPLOY_KEY }}
           path: _raw
+          fetch-depth: 0
 
       - name: 生データの置き場を金庫につなぐ
         run: |
@@ -114,6 +123,16 @@ jobs:
           # 同じ並びが workflow に2つ、手元に1つあって、1本足したときに
           # そのうち1か所を壊した（2026-09-19）。判断を2か所に置かない。
           GROUP=1 sh scripts/check_all.sh
+
+      # 相手台帳（data/ref/aite-daicho.json）の正本は VirgoB77/ogataten-nippo。
+      # ここ（gaitou-settou）はほかの置き場なので、取りに行く前に正本から読み直す。
+      # 読めなければ、この回はどこへも取りに行かない（門・common/kado.py が相手台帳を見る）。
+      # **この段は workflow が走るときだけ動く。**
+      - name: 相手台帳を正本から読み直す
+        run: |
+          curl -fsS https://raw.githubusercontent.com/VirgoB77/ogataten-nippo/main/data/ref/aite-daicho.json -o data/ref/aite-daicho.json.new \
+            && mv data/ref/aite-daicho.json.new data/ref/aite-daicho.json \
+            || { rm -f data/ref/aite-daicho.json; echo "相手台帳を読めなかった。この回はどこへも取りに行かない"; }
 
       # **毎回、設定したものを全部取りに行く。** 在っても飛ばさない（理由は scripts/fetch_data.py の頭）。
       # 前回と同じ中身なら生データには触らない。取れなかったものは前回の生データを残す。
@@ -174,8 +193,13 @@ jobs:
           #   data/build/unmatched.csv       … 突合できなかった行の個票。割合は docs/突合率.md に出す
           #   data/build/suppress-report.md  … なぜ伏せたかの記録。理由は公開側に書かない（6節）
           #   data/parse-unknown.md          … 走らせた記録。金庫の data/reports に写す
+          #
+          # data/ref/aite-kyou.json・kikai-fuda.json は門（common/kado.py）自身の記録
+          # （今日もう見たか・機械札）。次の回にも効くので、ここに含めて持ち越す。
+          # 機械はこの2つ以外の data/ref/（カード・相手台帳・承認）を書き換えない。
           for p in index.html policy.html style.css sitemap.xml .nojekyll index.json \
-                   cho data/build docs/突合率.md; do
+                   cho data/build docs/突合率.md \
+                   data/ref/aite-kyou.json data/ref/kikai-fuda.json; do
             if [ -e "$p" ] || [ -n "$(git ls-files -- "$p")" ]; then git add -A -- "$p"; fi
           done
           # data/build は市を足すたびに増えるので丸ごと入れるが、個票だけは外す。

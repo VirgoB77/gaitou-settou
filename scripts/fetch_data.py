@@ -4,33 +4,24 @@
 同時接続は1本、間隔は5秒以上、429/503 が返ったらその回は中止して次回に回す。
 押し込まない。回り込まない。
 
-**本体を取りに行く前に、そのホストの robots.txt を見る。** 拒否されていたら取らない。
-robots.txt はホストごとに1回の実行で1度だけ取る（56本の CSV は同じホスト）。
-転送（redirect）で別の場所へ行くときも、転送先を robots.txt で確かめる。
-転送で拒否をすり抜けない。
+**通信の手前に門（common/kado.py）がある。** カードごとに `K.card_mon()` を見て、
+通ったものだけ `with K.sesshon(...):` の中で取りに行く。門の中で
+`urllib.request.urlopen()` を呼ぶと、そのたびに URL範囲・相手台帳・robots.txt
+（fail-closed）・間隔（5秒）・429/503/401/403 の関所を通る。**転送（redirect）も
+1段ごとに、転送先で同じ関所をやり直す。** 押し込まない・回り込まないは、門がする。
 
-robots.txt の結果（共通仕様3.4）:
-
-    相手が答えた
-      2xx        中身を読む。中身が止めていれば取らない
-      404・410   置いていない。robots.txt の上では制限がない
-      401・403   相手が robots.txt を見せない。取らない
-      429・503   断られた。本体と同じく、その回は中止して次回に回す
-      上のどれでもない（400・405・451、ほかの4xx・5xx）
-                 **止めていないと確かめられない。この回は取らない。**
-                 「通してよい」と決まっていない状態を、推測で通さない
-    こちらから届かなかった（通信・中継・時間切れ）
-                 **相手の答えではない。記録で分ける。** この回は取らない
-
-**robots.txt が止めていないことは、取ってよいことを意味しない。**
-規約・公開条件の判断は別（共通仕様3.4）。ここが見るのは robots.txt だけ。
+robots.txt の判定（共通仕様3.4）は `common/kado.py` がする。ここは `K.robots_kekka()`
+に寄せるだけで、200 なら読む・404/410 は許可・HTML は分からない、等の判定を
+モジュール側で重複して持たない。**門が「確かめられなかった」（None）を返したら、
+許可として扱わない。**
 
 **捕まえないもの。**
 
   ・HTML が何の画面か。CSV・ZIP のはずの所に HTML が返ったら、その1本を
     unexpected_html とし、**その取得先にはその回もう行かない**（429・503 と同じ道）。
     待機列・エラーページ・ログイン画面のどれかは見分けていないし、推測もしない。
-    記録には見たことだけを書く。次の回はまた見に行く
+    記録には見たことだけを書く。次の回はまた見に行く。これは門の外側、
+    fetch_data 自身が持つ判断（門は CSV・ZIP の中身までは知らない）
   ・http:// を中継経由で取るとき、中継の 403 と相手の 403 は区別できない。
     取得先は https なので、中継の断りは「届かなかった」として出る
 
@@ -69,26 +60,27 @@ import os
 import shutil
 import sys
 import tempfile
-import time
 import urllib.error
-import urllib.parse
 import urllib.request
-import urllib.robotparser
 import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import config
 
+# common/ には __init__.py が無い。置き場の根を sys.path に足すと、
+# 名前空間パッケージとして `from common import kado` が通る
+# （tests/test_kado.py と同じ寄せ方）。
+sys.path.insert(0, str(config.ROOT))
+from common import kado  # noqa: E402
+
 sys.stdout.reconfigure(encoding="utf-8")
 
-# HTTPヘッダは ASCII しか通らない。日本語を入れると送信時に落ちる。
-HEADERS = {"User-Agent": config.USER_AGENT}
+# 本体（CSV・ZIP）の応答を待つ時間。門（common/kado.py）が課す間隔・関所とは別。
+TIMEOUT = 120
 
 # 作業中のファイルに付ける印。金庫の .gitignore が同じ印を外す。
 PART = ".part"
-
-_last_request = 0.0
 
 
 class Halted(Exception):
@@ -127,14 +119,13 @@ class NotData(Exception):
 
 
 class RobotsStop(Exception):
-    """robots.txt の都合で、本体へ行かない。回り込まない。
+    """門（common/kado.py の robots_kekka）が、本体の手前で止めた。回り込まない。
 
-    status は観測の記録に書く名前。**相手の答えと、こちらの都合を分ける。**
+    status は観測の記録に書く名前。**相手の答えと、確かめられなかったことを分ける。**
 
-      robots_disallowed   相手の robots.txt の中身が止めている
-      robots_refused      相手が robots.txt を 401・403 で見せない
-      robots_unusable     相手は答えたが、止めていないと確かめられない応答
-      robots_unreachable  **こちらから届かなかった。相手の答えではない**
+      robots_disallowed   robots.txt の中身が、この URL を止めている
+      robots_unusable     止めていないと確かめられない（届かない・HTML・混んでいる 等）。
+                          **確かめられなかったものを、許可として扱わない（fail-closed）**
     """
 
     def __init__(self, status, message):
@@ -143,138 +134,53 @@ class RobotsStop(Exception):
 
 
 class RobotsDenied(RobotsStop):
-    """相手が止めている（中身・401・403）。"""
+    """相手の robots.txt が、この URL を止めている。"""
 
 
 class RobotsUnknown(RobotsStop):
-    """止めていないと確かめられない（相手の応答が根拠にならない／届かない）。"""
-
-
-# この回に見た robots.txt。ホストごとに1つ。main() が回の頭で空にする。
-#   キー  "https://ホスト"
-#   値    (記録, 判定器)。判定器が None なら確かめられなかった
-_robots = {}
-
-
-def _pace():
-    """前の要求から5秒以上あける。robots.txt も本体も、同じ時計で数える。"""
-    global _last_request
-    wait = config.REQUEST_INTERVAL - (time.monotonic() - _last_request)
-    if wait > 0:
-        time.sleep(wait)
-    _last_request = time.monotonic()
-
-
-def _fetch_robots(url):
-    """robots.txt を1本取る。(HTTP の状態, 中身) を返す。
-
-    4xx・5xx は例外にせず状態で返す（判断は robots_for がする）。
-    通信できないときだけ例外。robots.txt 自体は robots の対象外なので、
-    転送はそのまま従う。やり直しはしない。
-    """
-    _pace()
-    req = urllib.request.Request(url, headers=HEADERS)
-    try:
-        with urllib.request.urlopen(req, timeout=120) as r:
-            return r.status, r.read()
-    except urllib.error.HTTPError as e:
-        e.close()
-        return e.code, b""
+    """止めていないと確かめられない（門の判定をそのまま受け取る）。"""
 
 
 def robots_for(url):
-    """url のホストの robots.txt を、この回で1度だけ見る。(記録, 判定器)。"""
-    parts = urllib.parse.urlsplit(url)
-    key = f"{parts.scheme}://{parts.netloc}"
-    if key in _robots:
-        return _robots[key]
-    robots_url = f"{key}/robots.txt"
-    # reached … 相手が HTTP で答えたか。False はこちらの都合（通信・中継・時間切れ）
-    rec = {"url": robots_url, "checked_at": now(), "reached": None, "http_status": None,
-           "result": None, "sha256": None, "crawl_delay": None, "error": None}
-    rp = urllib.robotparser.RobotFileParser(robots_url)
-    try:
-        status, body = _fetch_robots(robots_url)
-    except Exception as e:
-        # **こちらから届かなかった。** 中継が CONNECT を断った（403 を含む）ときもここ。
-        # 相手の 403 とは記録を分ける（共通仕様3.4）
-        rec.update(reached=False, result="unreachable", error=f"{type(e).__name__}: {e}")
-        rp = None
-    else:
-        rec.update(reached=True, http_status=status)
-        if status in (429, 503):
-            rec["result"] = "halted"
-            rp = None
-        elif 200 <= status < 300:
-            rp.parse(body.decode("utf-8", errors="replace").splitlines())
-            rec.update(result="parsed", sha256=sha256(body),
-                       crawl_delay=rp.crawl_delay(config.USER_AGENT))
-        elif status in (404, 410):
-            rp.allow_all = True
-            rec["result"] = "not_found"
-        elif status in (401, 403):
-            rp.disallow_all = True
-            rec["result"] = "refused"
-        else:
-            # 400・405・451、ほかの4xx・5xx。「通してよい」と決まっていない
-            rec["result"] = "unusable"
-            rp = None
-    _robots[key] = (rec, rp)
-    return _robots[key]
+    """url が robots.txt で止められていないか。**門（common/kado.py）の判定をそのまま返す。**
+
+    返り値は (許すか, 理由)。許すかは True・False・None（**確かめられなかった**）。
+    robots.txt の実際の読み書き・判定（200・404/410・HTML・空 等）は
+    common/kado.py がする。ここは寄せるだけで、モジュール側に判定を重複して持たない。
+    **セッション（K.sesshon の中）でだけ意味がある。**
+    """
+    K = kado.genzai()
+    if K is None:
+        return None, "門（common/kado.py）が始まっていない"
+    return K.robots_kekka(url)
 
 
 def check_robots(url):
     """robots.txt が止めていないかを確かめる。止めている・確かめられないなら例外。
 
     **通っても「取ってよい」ではない。** 規約・公開条件は別の判断（共通仕様3.4）。
-    robots.txt に 429・503 → Halted（本体と同じ扱い。その回は中止）。
-    **別の URL・別のホスト・http への言い換えで取り直さない。**
+    **None（確かめられなかった）を許可として扱う分岐は無い。** fail-closed。
+    **別の URL・別のホスト・http への言い換えで取り直さない**
+    （門の対象host・URL範囲が、それを許さない）。
     """
-    rec, rp = robots_for(url)
-    r, code = rec["result"], rec["http_status"]
-    if r == "halted":
-        raise Halted(code)
-    if r == "unreachable":
-        raise RobotsUnknown("robots_unreachable",
-                            f"{rec['url']} に届かなかった（こちら側：{rec['error']}）")
-    if r == "unusable":
-        raise RobotsUnknown("robots_unusable",
-                            f"{rec['url']} が HTTP {code} を返した。止めていないと確かめられない")
-    if r == "refused":
-        raise RobotsDenied("robots_refused", f"{rec['url']} を相手が HTTP {code} で見せない")
-    if not rp.can_fetch(config.USER_AGENT, url):
-        raise RobotsDenied("robots_disallowed", f"{rec['url']} の中身が止めている")
-
-
-class _RobotsRedirect(urllib.request.HTTPRedirectHandler):
-    """転送先も robots.txt で確かめる。**転送で拒否をすり抜けない。**"""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        before = _last_request
-        try:
-            check_robots(newurl)
-        except BaseException:
-            fp.close()
-            raise
-        if _last_request != before:
-            _pace()      # 転送先の robots.txt を取った直後に、本体へ行かない
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-_opener = urllib.request.build_opener(_RobotsRedirect)
+    ok, why = robots_for(url)
+    if ok is True:
+        return
+    if ok is False:
+        raise RobotsDenied("robots_disallowed", why)
+    raise RobotsUnknown("robots_unusable", why)
 
 
 def get(url):
-    """1本ずつ、5秒以上あけて取りに行く。(HTTP の状態, 中身) を返す。
+    """本体を1本取りに行く。(HTTP の状態, 中身) を返す。
 
-    先に robots.txt を確かめる（この回で見ていれば手元の判定だけで、通信はしない）。
-    転送先も確かめる（_RobotsRedirect）。やり直しはしない。
+    間隔（5秒）・URL範囲・相手台帳・robots.txt・転送のたびの関所は、
+    門（common/kado.py。`urllib.request.urlopen()` の既定の opener）がする。
+    ここでは 429・503 を Halted に変えるだけ（本体の1本として記録するため）。
+    門で止まったときは `kado.Tomeru`（`urllib.error.URLError` の仲間）がそのまま出る。
     """
-    check_robots(url)
-    _pace()
-    req = urllib.request.Request(url, headers=HEADERS)
     try:
-        with _opener.open(req, timeout=120) as r:
+        with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         if e.code in (429, 503):
@@ -314,7 +220,9 @@ def write_atomic(path, data):
 
 
 def is_html(body):
-    """先頭が HTML か。**CSV・ZIP のはずの本体にだけ使う。** robots.txt には使わない。"""
+    """先頭が HTML か。**CSV・ZIP のはずの本体にだけ使う。** robots.txt には使わない
+    （robots.txt が HTML かどうかは common/kado.py が見る）。
+    """
     head = body[:512].lstrip().lower()
     return head.startswith((b"<!doctype", b"<html"))
 
@@ -399,6 +307,14 @@ def robots_entry(entry, prev_sha, e):
     return failed_entry(entry, prev_sha, e.status, str(e))
 
 
+def gate_entry(entry, prev_sha, e):
+    """門（common/kado.py）が、robots.txt の事前確認より先で止めた1本の記録
+    （転送先が範囲の外・相手台帳に無い・この回この相手はもう止めた、等）。
+    通信は出ていないか、途中（転送の1段目）までしか出ていない。
+    """
+    return failed_entry(entry, prev_sha, "gate_blocked", str(e))
+
+
 def failed_entry(entry, prev_sha, status, err, http_status=None):
     entry.update({
         "status": status,
@@ -418,7 +334,7 @@ def observe_csv(pref, year, teguchi):
     url = pref.csv_url(year, teguchi)
     prev = file_sha256(out)
     entry = {"kind": "police_csv", "url": url, "path": rel(out), "fetched_at": now()}
-    # **本体の前に robots.txt。** 拒否・不明なら get を呼ばない
+    # **本体の前に robots.txt。** 拒否・不明なら本体へ行かない
     try:
         check_robots(url)
     except RobotsStop as e:
@@ -429,9 +345,12 @@ def observe_csv(pref, year, teguchi):
         check_csv(body)
     except Halted:
         raise
-    except RobotsStop as e:     # 転送先で拒否・不明
+    except RobotsStop as e:     # 転送先で拒否・不明（門が転送のたびに確かめる）
         print(f"  取らない {name}  {e}")
         return robots_entry(entry, prev, e)
+    except kado.Tomeru as e:    # 門のほかの理由で止めた（URL範囲の外・相手台帳 等）
+        print(f"  取らない {name}  門で止めた：{e}")
+        return gate_entry(entry, prev, e)
     except urllib.error.HTTPError as e:
         print(f"  失敗 {name}  HTTP {e.code}")
         return failed_entry(entry, prev, "failed", f"HTTP {e.code}", e.code)
@@ -466,7 +385,7 @@ def observe_boundary(c):
     prev_zip = file_sha256(zip_path)
     entry = {"kind": "estat_boundary_zip", "url": url, "path": rel(zip_path),
              "extracted_to": rel(dest), "fetched_at": now()}
-    # **本体の前に robots.txt。** 拒否・不明なら get を呼ばない
+    # **本体の前に robots.txt。** 拒否・不明なら本体へ行かない
     try:
         check_robots(url)
     except RobotsStop as e:
@@ -482,6 +401,9 @@ def observe_boundary(c):
     except RobotsStop as e:     # 転送先で拒否・不明
         print(f"  取らない {label}  {e}")
         return robots_entry(entry, prev_zip, e)
+    except kado.Tomeru as e:    # 門のほかの理由で止めた
+        print(f"  取らない {label}  門で止めた：{e}")
+        return gate_entry(entry, prev_zip, e)
     except urllib.error.HTTPError as e:
         print(f"  失敗 {label}  HTTP {e.code}")
         return failed_entry(entry, prev_zip, "failed", f"HTTP {e.code}", e.code)
@@ -524,10 +446,11 @@ def observe_boundary(c):
     return entry
 
 
-def not_attempted(entry):
+def not_attempted(entry, riyuu=None):
+    """この回は行かなかった。理由が無ければ、既定の文言（前の1本で止めた）を使う。"""
     prev = file_sha256(config.RAW / entry["path"])
     return failed_entry(entry, prev, "not_attempted",
-                        "この回は行かなかった（同じ取得先の前の1本で止めた）")
+                        riyuu or "この回は行かなかった（同じ取得先の前の1本で止めた）")
 
 
 def plan():
@@ -539,53 +462,80 @@ def plan():
     return csvs, list(config.CITIES)
 
 
-def observe_all(files, halted):
+def observe_all(files, halted, K):
     """全部を取りに行き、manifest に書く中身を files と halted に積む。
+
+    取得先（カード）ごとに、通信の前に **K.card_mon()**（門の部品）を見る。
+    止める理由があれば、その並びは1本も通信せず、全部「取りに行かなかった」にする。
+    通過したら、その並びの通信を全部 `with K.sesshon(...):` の中で行う。
+    `kado.Tomeru` は門で止めた印（通信は出ていない）。捕まえて次の1本へ進む。
 
     途中で落ちても、そこまでの記録が manifest に残るように、渡された一覧に足していく。
     """
     csvs, cities = plan()
 
     print("県警CSV")
-    stop = None
-    for pref, year, teguchi in csvs:
-        if stop is not None:
-            name = pref.csv_name(year, teguchi)
+    riyuu = K.card_mon("hyogo-police-csv", hozon_saki=config.RAW)
+    if riyuu:
+        print(f"  門で止めた：{'／'.join(riyuu)}")
+        for pref, year, teguchi in csvs:
             files.append(not_attempted({
                 "kind": "police_csv", "url": pref.csv_url(year, teguchi),
-                "path": name, "fetched_at": None}))
-            continue
-        try:
-            files.append(observe_csv(pref, year, teguchi))
-        except Halted as e:
-            print(f"  中止 {e}")
-            stop = e
-            name = pref.csv_name(year, teguchi)
-            files.append(failed_entry(
-                {"kind": "police_csv", "url": pref.csv_url(year, teguchi),
-                 "path": name, "fetched_at": now()},
-                file_sha256(config.RAW / name), e.status, str(e), e.code))
-            halted.append({"host": "police", "http_status": e.code, "reason": e.status})
+                "path": pref.csv_name(year, teguchi), "fetched_at": None},
+                "門で止めた：" + "／".join(riyuu)))
+    else:
+        with K.sesshon("hyogo-police-csv", hozon_saki=config.RAW):
+            stop = None
+            for pref, year, teguchi in csvs:
+                if stop is not None:
+                    files.append(not_attempted({
+                        "kind": "police_csv", "url": pref.csv_url(year, teguchi),
+                        "path": pref.csv_name(year, teguchi), "fetched_at": None},
+                        str(stop)))
+                    continue
+                try:
+                    files.append(observe_csv(pref, year, teguchi))
+                except Halted as e:
+                    print(f"  中止 {e}")
+                    stop = e
+                    name = pref.csv_name(year, teguchi)
+                    files.append(failed_entry(
+                        {"kind": "police_csv", "url": pref.csv_url(year, teguchi),
+                         "path": name, "fetched_at": now()},
+                        file_sha256(config.RAW / name), e.status, str(e), e.code))
+                    halted.append({"host": "police", "http_status": e.code, "reason": e.status})
 
     print("町丁目境界")
-    stop = None
-    for c in cities:
-        label = f"境界_{c['name']}"
-        entry = {"kind": "estat_boundary_zip",
-                 "url": config.ESTAT_BOUNDARY.format(city_code=c["code"]),
-                 "path": f"source_zip/{label}.zip", "extracted_to": label}
-        if stop is not None:
-            files.append(not_attempted(dict(entry, fetched_at=None)))
-            continue
-        try:
-            files.append(observe_boundary(c))
-        except Halted as e:
-            print(f"  中止 {e}")
-            stop = e
-            files.append(failed_entry(dict(entry, fetched_at=now()),
-                                      file_sha256(config.RAW / entry["path"]),
-                                      e.status, str(e), e.code))
-            halted.append({"host": "e-stat", "http_status": e.code, "reason": e.status})
+    riyuu = K.card_mon("estat-boundary", hozon_saki=config.RAW)
+    if riyuu:
+        print(f"  門で止めた：{'／'.join(riyuu)}")
+        for c in cities:
+            label = f"境界_{c['name']}"
+            files.append(not_attempted({
+                "kind": "estat_boundary_zip",
+                "url": config.ESTAT_BOUNDARY.format(city_code=c["code"]),
+                "path": f"source_zip/{label}.zip", "extracted_to": label, "fetched_at": None},
+                "門で止めた：" + "／".join(riyuu)))
+    else:
+        with K.sesshon("estat-boundary", hozon_saki=config.RAW):
+            stop = None
+            for c in cities:
+                label = f"境界_{c['name']}"
+                entry = {"kind": "estat_boundary_zip",
+                         "url": config.ESTAT_BOUNDARY.format(city_code=c["code"]),
+                         "path": f"source_zip/{label}.zip", "extracted_to": label}
+                if stop is not None:
+                    files.append(not_attempted(dict(entry, fetched_at=None), str(stop)))
+                    continue
+                try:
+                    files.append(observe_boundary(c))
+                except Halted as e:
+                    print(f"  中止 {e}")
+                    stop = e
+                    files.append(failed_entry(dict(entry, fetched_at=now()),
+                                              file_sha256(config.RAW / entry["path"]),
+                                              e.status, str(e), e.code))
+                    halted.append({"host": "e-stat", "http_status": e.code, "reason": e.status})
 
 
 def summarize(files):
@@ -598,7 +548,7 @@ def summarize(files):
     return out
 
 
-def write_manifest(observed_at, files, halted, error=None):
+def write_manifest(observed_at, files, halted, K, error=None):
     doc = {
         "observed_at": observed_at,
         "finished_at": now(),
@@ -610,8 +560,9 @@ def write_manifest(observed_at, files, halted, error=None):
             ("run_id", "GITHUB_RUN_ID"),
             ("commit", "GITHUB_SHA"))},
         "halted": halted,
-        # この回に見た robots.txt（ホストごとに1つ）。全文は残さず、指紋だけ
-        "robots": [rec for rec, _ in _robots.values()],
+        # 門（common/kado.py）が出した・止めた記録。robots.txt の全文は残さない
+        "kado_kiroku": [{"card": cid, "url": url, "output": de, "reason": riyuu}
+                        for cid, url, de, riyuu in K.kiroku],
         "error": error,
         "targets": len(files),
         "summary": summarize(files),
@@ -629,17 +580,18 @@ def write_manifest(observed_at, files, halted, error=None):
 
 
 def main():
-    _robots.clear()   # robots.txt は回ごとに見直す。前の回の答えを持ち越さない
+    # 実行の最初に、門（common/kado.py）を1回だけ始める。以後の urlopen() は全部この門を通る
+    K = kado.hajimeru(str(config.ROOT), config.SITE_ID, config.USER_AGENT)
     config.RAW.mkdir(parents=True, exist_ok=True)
     observed_at = now()
     files, halted, error = [], [], None
     try:
-        observe_all(files, halted)
+        observe_all(files, halted, K)
     except BaseException as e:
         error = f"{type(e).__name__}: {e}"
         raise
     finally:
-        path, doc = write_manifest(observed_at, files, halted, error)
+        path, doc = write_manifest(observed_at, files, halted, K, error)
         print(f"観測の記録  {rel(path)}  {doc['summary']}")
     ok = bool(files) and all(f["status"] == "ok" for f in files)
     print("完了" if ok else "取れなかったものがある。前回の生データは残した")
