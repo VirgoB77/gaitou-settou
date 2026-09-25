@@ -1,0 +1,643 @@
+{
+ "_setsumei": "相手台帳（運用基準 v1 §9）。相手は運営主体の単位。host はその相手を引く鍵。担当は、その相手へ直接取りに行ってよい置き場を1つだけ書く。複数の置き場のカードに出てくる相手は「未定」（統括・運営者が決めるまで、どこも行かない）。正本は VirgoB77/ogataten-nippo の data/ref/aite-daicho.json。ほかの置き場は、取りに行く前にこれを読み直す。名寄せ（どの host がどの相手か）は step 0 で参謀が仮に付けた。統括が確かめる",
+ "aite": {
+  "Francfranc": {
+   "host": [
+    "francfranc.com"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "G空間情報センター": {
+   "host": [
+    "www.geospatial.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "Internet Archive": {
+   "host": [
+    "web.archive.org"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "JR西日本": {
+   "host": [
+    "delay.trafficinfo.westjr.co.jp",
+    "www.westjr.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "JR西日本SC開発": {
+   "host": [
+    "www.lucua.jp",
+    "www.tennojimio.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "city.himeji.gkan.jp": {
+   "host": [
+    "city.himeji.gkan.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "gelato pique": {
+   "host": [
+    "gelatopique.com"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "nw.tohoku-epco.co.jp": {
+   "host": [
+    "nw.tohoku-epco.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "opendata.nishi.or.jp": {
+   "host": [
+    "opendata.nishi.or.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "powergrid.chuden.co.jp": {
+   "host": [
+    "powergrid.chuden.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "quadro": {
+   "host": [
+    "quadro-web.com"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "services3.arcgis.com": {
+   "host": [
+    "services3.arcgis.com"
+   ],
+   "カードがある置き場": [
+    "kaihatsu-data"
+   ],
+   "担当": "kaihatsu-data"
+  },
+  "www.city.hannan.lg.jp": {
+   "host": [
+    "www.city.hannan.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.hirakata.osaka.jp": {
+   "host": [
+    "www.city.hirakata.osaka.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.ibaraki.osaka.jp": {
+   "host": [
+    "www.city.ibaraki.osaka.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.izumisano.lg.jp": {
+   "host": [
+    "www.city.izumisano.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.kadoma.osaka.jp": {
+   "host": [
+    "www.city.kadoma.osaka.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.kaizuka.lg.jp": {
+   "host": [
+    "www.city.kaizuka.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.kawachinagano.lg.jp": {
+   "host": [
+    "www.city.kawachinagano.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.kishiwada.lg.jp": {
+   "host": [
+    "www.city.kishiwada.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.matsubara.lg.jp": {
+   "host": [
+    "www.city.matsubara.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.minoh.lg.jp": {
+   "host": [
+    "www.city.minoh.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.osaka-izumi.lg.jp": {
+   "host": [
+    "www.city.osaka-izumi.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.osakasayama.osaka.jp": {
+   "host": [
+    "www.city.osakasayama.osaka.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.sennan.lg.jp": {
+   "host": [
+    "www.city.sennan.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.toyonaka.osaka.jp": {
+   "host": [
+    "www.city.toyonaka.osaka.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.city.yao.osaka.jp": {
+   "host": [
+    "www.city.yao.osaka.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.energia.co.jp": {
+   "host": [
+    "www.energia.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.hepco.co.jp": {
+   "host": [
+    "www.hepco.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.jcsc.or.jp": {
+   "host": [
+    "www.jcsc.or.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.kansai-td.co.jp": {
+   "host": [
+    "www.kansai-td.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.okiden.co.jp": {
+   "host": [
+    "www.okiden.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.rikuden.co.jp": {
+   "host": [
+    "www.rikuden.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.sangyo-rodo.metro.tokyo.lg.jp": {
+   "host": [
+    "www.sangyo-rodo.metro.tokyo.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.tepco.co.jp": {
+   "host": [
+    "www.tepco.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.town.kumatori.lg.jp": {
+   "host": [
+    "www.town.kumatori.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "www.yonden.co.jp": {
+   "host": [
+    "www.yonden.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "イオンモール": {
+   "host": [
+    "itami.aeonmall.jp",
+    "kyoto.aeonmall.com",
+    "shijonawate.aeonmall.jp",
+    "umie.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "グランフロント大阪TMO": {
+   "host": [
+    "www.grandfront-osaka.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "セブン&アイ": {
+   "host": [
+    "kakogawa.ario.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "ビームス": {
+   "host": [
+    "www.beams.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "ロフト": {
+   "host": [
+    "www.loft.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "三井不動産": {
+   "host": [
+    "mitsui-shopping-park.com"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "九州電力送配電": {
+   "host": [
+    "www.kyuden.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "京阪": {
+   "host": [
+    "kuzuha-mall.com"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "京阪電気鉄道": {
+   "host": [
+    "www.keihan.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "兵庫県": {
+   "host": [
+    "web.pref.hyogo.lg.jp",
+    "www.kankyo.pref.hyogo.lg.jp"
+   ],
+   "カードがある置き場": [
+    "gaitou-settou",
+    "kaihatsu-data",
+    "keibai-toukei",
+    "ogataten-nippo"
+   ],
+   "担当": "未定"
+  },
+  "南海電気鉄道": {
+   "host": [
+    "nambaparks.com",
+    "www.nambacity.com",
+    "www.nankai.co.jp",
+    "www.traffic.nankai.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "国土交通省": {
+   "host": [
+    "nlftp.mlit.go.jp",
+    "www.mlit.go.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "国税庁": {
+   "host": [
+    "www.koubai.nta.go.jp",
+    "www.nta.go.jp"
+   ],
+   "カードがある置き場": [
+    "keibai-toukei"
+   ],
+   "担当": "keibai-toukei"
+  },
+  "堺市": {
+   "host": [
+    "www.city.sakai.lg.jp"
+   ],
+   "カードがある置き場": [
+    "kaihatsu-data",
+    "ogataten-nippo"
+   ],
+   "担当": "未定"
+  },
+  "大阪メトロ": {
+   "host": [
+    "subway.osakametro.co.jp",
+    "www.osakametro.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "大阪市": {
+   "host": [
+    "www.city.osaka.lg.jp"
+   ],
+   "カードがある置き場": [
+    "kaihatsu-data",
+    "keibai-toukei",
+    "ogataten-nippo"
+   ],
+   "担当": "未定"
+  },
+  "大阪府": {
+   "host": [
+    "www.pref.osaka.lg.jp"
+   ],
+   "カードがある置き場": [
+    "kaihatsu-data",
+    "keibai-toukei",
+    "ogataten-nippo"
+   ],
+   "担当": "未定"
+  },
+  "尼崎市": {
+   "host": [
+    "www.city.amagasaki.hyogo.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "山陽電気鉄道": {
+   "host": [
+    "www.sanyo-railway.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "明石市": {
+   "host": [
+    "www.city.akashi.lg.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "最高裁判所（BIT）": {
+   "host": [
+    "www.bit.courts.go.jp"
+   ],
+   "カードがある置き場": [
+    "keibai-toukei"
+   ],
+   "担当": "keibai-toukei"
+  },
+  "東急不動産": {
+   "host": [
+    "qs-mall.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "神戸市": {
+   "host": [
+    "www.city.kobe.lg.jp"
+   ],
+   "カードがある置き場": [
+    "kaihatsu-data",
+    "keibai-toukei",
+    "ogataten-nippo"
+   ],
+   "担当": "未定"
+  },
+  "神戸電鉄": {
+   "host": [
+    "www.shintetsu.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "総務省": {
+   "host": [
+    "www.soumu.go.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "総務省統計局（e-Stat）": {
+   "host": [
+    "www.e-stat.go.jp"
+   ],
+   "カードがある置き場": [
+    "gaitou-settou"
+   ],
+   "担当": "gaitou-settou"
+  },
+  "財務省": {
+   "host": [
+    "lfb.mof.go.jp"
+   ],
+   "カードがある置き場": [
+    "kaihatsu-data"
+   ],
+   "担当": "kaihatsu-data"
+  },
+  "近畿日本鉄道": {
+   "host": [
+    "www.kintetsu.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "阪急阪神": {
+   "host": [
+    "nishinomiya-gardens.com",
+    "www.h-sanbangai.com",
+    "www.hankyu-hanshin.co.jp",
+    "www.hhp.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "阪急電鉄": {
+   "host": [
+    "www.hankyu.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  },
+  "阪神電気鉄道": {
+   "host": [
+    "www.hanshin.co.jp"
+   ],
+   "カードがある置き場": [
+    "ogataten-nippo"
+   ],
+   "担当": "ogataten-nippo"
+  }
+ },
+ "版": 1
+}
