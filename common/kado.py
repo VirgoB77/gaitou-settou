@@ -82,6 +82,7 @@ YOYAKU_NINSHIKI = ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "
 YOYAKU_SCHEMA = 1
 YOYAKU_MICHI = "yoyaku"          # 本番の予約の置き場。ダミー競合試験は "test"
 YOYAKU_KAISU = 5                 # push が通らないときに積み直す上限
+JST = datetime.timezone(datetime.timedelta(hours=9), "JST")
 
 CARD = os.path.join("data", "ref", "torimoto-card.json")
 SHOUNIN = os.path.join("data", "ref", "shounin")
@@ -446,12 +447,21 @@ def robots_hantei(status, ctype, body, cenc=""):
 
 # ------------------------------------------------------------------ 門
 class _RobotsTenSou(urllib.request.HTTPRedirectHandler):
-    """robots.txt の転送は、**同じ相手の /robots.txt へのもの**（http → https 等）だけ辿る。"""
+    """robots.txt の転送は、**同じ相手の /robots.txt へのもの**（http → https 等）だけ辿る。
+
+    転送の先へ出すのも1本の外部通信なので、出す前に日付の関所を通す（門が渡されていれば）。
+    """
     max_redirections = 5
+
+    def __init__(self, kado=None):
+        super().__init__()
+        self.kado = kado
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not robots_no_basho(req.full_url, newurl):
             return None                # よその場所へは辿らない（確かめられなかった）
+        if self.kado is not None:
+            self.kado.hi_no_seki()     # 日付をまたいでいたら、転送の先へは出さない
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -779,6 +789,7 @@ class Kado:
                                   or self.env.get("GITHUB_WORKFLOW") or ""))
         michi = "%s/%s/%s.json" % (self.yoyaku_michi, self.today, aid)
         onaji = lambda s: all(s.get(k) == jibun[k] for k in ("repo", "run_id", "run_attempt", "job"))
+        nakami = json.dumps(jibun, ensure_ascii=False, sort_keys=True, indent=1) + "\n"
         saigo = "予約の競合が %d 回続いた" % YOYAKU_KAISU
         for _ in range(YOYAKU_KAISU):
             if _git(d, "fetch", "--quiet", "origin", "main").returncode != 0:
@@ -792,23 +803,35 @@ class Kado:
                 return "今日はほかの実行が、この相手を予約している（%s）" % s.get("repo")
             if _git(d, "checkout", "--quiet", "-B", "yoyaku-kaku", "origin/main").returncode != 0:
                 return "予約台帳の作業木をそろえられない"
+            moto = _git(d, "rev-parse", "--verify", "-q", "origin/main").stdout.strip()
+            if not moto:
+                return "予約台帳の先頭が読めない"
             os.makedirs(os.path.join(d, os.path.dirname(michi)), exist_ok=True)
             with open(os.path.join(d, michi), "w", encoding="utf-8", newline="\n") as f:
-                json.dump(jibun, f, ensure_ascii=False, sort_keys=True, indent=1)
-                f.write("\n")
+                f.write(nakami)
             if _git(d, "add", "--", michi).returncode != 0 or _git(
                     d, "-c", "user.name=kujiraya-yoyaku", "-c", "user.email=yoyaku@kujiraya.invalid",
                     "commit", "--quiet", "-m",
                     "予約 %s %s %s#%s/%s/%s" % (self.today, aid, jibun["repo"], jibun["run_id"],
                                               jibun["run_attempt"], jibun["job"])).returncode != 0:
                 return "予約を書けない（commit）"
-            p = _git(d, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+            mine = _git(d, "rev-parse", "--verify", "-q", "HEAD").stdout.strip()
+            why = self._yoyaku_tsuika_dake(d, mine, moto, michi, nakami)
+            if why:
+                return why             # **push しない**
+            p = _git(d, "push", "--quiet", "origin", "%s:refs/heads/main" % mine)
             if p.returncode == 0:
-                mine = _git(d, "rev-parse", "HEAD").stdout.strip()
                 if _git(d, "fetch", "--quiet", "origin", "main").returncode != 0:
                     return "予約のあとで取り込み直せない"
                 if _git(d, "merge-base", "--is-ancestor", mine, "origin/main").returncode != 0:
                     return "書いた予約が台帳に入っていない"
+                # 台帳に入った自分の commit が、追加1件だけのものか（push の前と同じ照合を、入ったあとにも）
+                why = self._yoyaku_tsuika_dake(d, mine, moto, michi, nakami)
+                if why:
+                    return "台帳に入った予約の commit：" + why
+                # 書いたあとで、自分の予約がだれかに変えられていないか
+                if _git(d, "diff", "--quiet", mine, "origin/main", "--", michi).returncode != 0:
+                    return "書いた予約が、あとから変えられた"
                 aru, s = self._yoyaku_yomu(d, michi, aid)
                 if aru != "在る" or not onaji(s):
                     return "書いた予約を読み直せない"
@@ -818,6 +841,43 @@ class Kado:
                 saigo = "予約を push できない"
             # 取り込み直して、同じ相手・同じ日が先に取られていないか見る
         return saigo
+
+    def _yoyaku_tsuika_dake(self, d, rev, moto, michi, nakami):
+        """その commit が「予定の予約ファイル1件の追加だけ」か。止める理由（空文字ならよい）。
+
+        - 親はちょうど1つで、取り込んだ台帳の先頭（moto）であること
+        - 親との差分が、ちょうど1件「新しい通常のファイル michi の追加」であること。
+          改名・写しの見分けは**わざと切る**（見分けると、前の日の予約とよく似た新しい予約が「写し」と
+          出てしまう）。切ると、改名は「削除＋追加」の2件になるので、1件でないとして止まる
+        - 入ったバイトが、書くつもりだった中身（nakami）と同じであること
+        既存のファイルの変更・削除・改名、予定外のファイルの追加が1つでもあれば止める。
+        """
+        if not rev or not moto:
+            return "予約の commit が読めない"
+        r = _git(d, "rev-list", "--parents", "-n", "1", rev)
+        ids = r.stdout.split() if r.returncode == 0 else []
+        if len(ids) != 2 or ids[0] != rev:
+            return "予約の commit の親が1つでない"
+        if ids[1] != moto:
+            return "予約の commit の親が、取り込んだ台帳の先頭でない"
+        r = _git(d, "diff-tree", "-r", "-z", "--raw", "--no-commit-id", "--no-ext-diff",
+                 "--no-renames", moto, rev)
+        if r.returncode != 0:
+            return "予約の commit の差分が読めない"
+        kire = r.stdout.split("\0")
+        if kire and kire[-1] == "":
+            kire.pop()
+        if len(kire) != 2 or kire[1] != michi:
+            shurui = "・".join(sorted({x.split()[-1] for x in kire[0::2] if x.startswith(":")}))
+            return "予約の commit に、予定の1件の追加でないものが入っている（%d 件・%s）" % (
+                len(kire) // 2, shurui or "読めない")
+        m = re.fullmatch(r":000000 100644 0{7,64} ([0-9a-f]{7,64}) A", kire[0])
+        if not m:
+            return "予約の commit に、予定の1件の追加でないものが入っている"
+        b = _git(d, "cat-file", "blob", m.group(1))
+        if b.returncode != 0 or b.stdout != nakami:
+            return "予約の commit の中身が、書くつもりのものと違う"
+        return ""
 
     def _yoyaku_shoumei(self, aite):
         """最初の外部通信の直前に呼ぶ。予約を証明できなければ Tomeru。"""
@@ -841,12 +901,37 @@ class Kado:
         self.kiroku.append(("", aite, "予約した", ""))
 
     # ---------------------------------------------------------- URL ごとの関所
+    def hi_no_seki(self):
+        """外部通信の直前に呼ぶ。**いまの日本時間の日付が、この実行の日付（RUN_DATE）と同じか。**
+
+        日付は実行の最初に1回だけ決める（門は時計で日付を決めない）。ここで時計を見るのは、
+        日付をまたいだ回を**止める**ためだけ。22時台に始まって0時を越えた回が、翌日の分を
+        取りに行かない（予約済みの相手でも、robots.txt でも、転送の先でも）。食い違ったら Tomeru。
+        """
+        riyuu = ""
+        rd = self.env.get("RUN_DATE")
+        if self.today is None:
+            riyuu = "この実行の日付（RUN_DATE）が無い"
+        elif rd and rd != self.today:
+            riyuu = "RUN_DATE（%s）と、この実行の日付（%s）が違う" % (rd, self.today)
+        else:
+            ima = datetime.datetime.fromtimestamp(self._now(), JST).date().isoformat()
+            if ima != self.today:
+                riyuu = "日本時間の日付が変わった（この実行 %s・いま %s）。この回は、もう外へ出さない" % (
+                    self.today, ima)
+        if riyuu:
+            if not any(x[2] == "日付で止めた" for x in self.kiroku):
+                self.kiroku.append(("", "", "日付で止めた", riyuu))
+            raise Tomeru(riyuu)
+
     def _matsu(self, aite, delay=None):
         """同じ相手へは、前の1本から5秒（Crawl-delay が長ければそちら）空ける。
 
         **同じ回の別の処理（別の .py）が出した分も数える。** 最後に出した時刻は今日の控えに残す。
-        ここはその相手への外部通信の直前なので、**予約台帳の予約をここで証明する**（robots.txt も本体も通る）。
+        ここはその相手への外部通信の直前なので、**日付の関所と、予約台帳の予約をここで確かめる**
+        （robots.txt も本体も、転送の先も通る）。
         """
+        self.hi_no_seki()
         self._yoyaku_shoumei(aite)
         w = max(MATSU, delay or 0)
         e = (self._kyou_yomu() or {}).get(aite) or {}
@@ -857,6 +942,8 @@ class Kado:
             nokori = t + w - self._now()
             if nokori > 0:
                 self._sleep(nokori)
+        # 待ったあと、出す直前にもう一度（待つ間に0時を越えることがある。Crawl-delay は長いこともある）
+        self.hi_no_seki()
         self._saigo[aite] = self._now()
         self._kyou_kaku(aite, saigo=self._saigo[aite])
 
@@ -866,7 +953,7 @@ class Kado:
             return self._robots[key]
         url = "%s://%s/robots.txt" % (scheme, host)
         self._matsu(aite)              # robots.txt を見に行くのも、その相手への1観測に数える
-        handlers = [_RobotsTenSou()]
+        handlers = [_RobotsTenSou(self)]
         if self.transport is not None:
             handlers.insert(0, self.transport)
         op = urllib.request.build_opener(*handlers)
