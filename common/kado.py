@@ -58,6 +58,14 @@ SHUBETSU = ("行政", "準公的", "民間一次", "二次・集約")
 SEIKI = ("未調査", "無し", "有り・採用", "有り・不採用", "問い合わせ中")
 SENMONKA_TOMERU = "取得開始前に必要"
 KONKYO = ("1", "2", "3", "4")
+# 4 は行政等の公式な再利用条件（運用基準 v1 rev2 §4 C.4）。民間・二次集約には使えない
+KONKYO_GYOSEI_DAKE = ("4",)
+# 個人情報・個票の取得前ゲート（民間公開Web v3 §6）。カードの欄の名前
+KOJIN_GATE_SANCHI = ("当事者に個人がありうる", "氏名を含みうる", "個人の電話番号を含みうる",
+                     "個人の生活住所を含みうる")
+KOJIN_GATE_KISAI = ("個票の粒度", "所在地の扱い", "privateに保存する予定", "publicに出す予定",
+                    "公開時の粒度")
+MIKETSU = ("未確認", "未決", "分からない")
 ROBOTS = ("通す", "拒否", "混んでいる", "確かめられなかった")
 # 1回の取得で、承認に含まれていなければならない行為。**取ったものは必ず金庫に残す**ので、
 # 取るだけで内部保存もしている
@@ -193,8 +201,13 @@ def _kaketeiru(card):
         nai.append("規約確認日")
     if not (shoseki.get("規約URL") or "").startswith("http"):
         nai.append("規約URL")
-    if str(card.get("肯定根拠番号") or "") not in KONKYO:
+    bango = str(card.get("肯定根拠番号") or "")
+    if bango not in KONKYO:
         nai.append("肯定根拠番号")
+    elif bango in KONKYO_GYOSEI_DAKE and card.get("source種別") not in ("行政", "準公的"):
+        # 4（行政等の公式な再利用条件）は行政・準公的のためのもの。民間・二次集約は
+        # 1〜3（相手の明示許可・規約等の明示許可・公式の正規提供手段）だけ（民間公開Web v3 §3）
+        nai.append("肯定根拠番号（4 は行政・準公的の取得元だけ）")
     riyuu = card.get("判定理由") or ""
     if not riyuu.strip() or GAITOU_NASHI.match(riyuu):
         nai.append("判定理由（「該当文言なし」だけでは足りない）")
@@ -210,6 +223,16 @@ def _kaketeiru(card):
         nai.append("source種別")
     if card.get("個人情報を含みうる") not in KOJIN:
         nai.append("個人情報を含みうる")
+    # 個人情報・個票の取得前ゲート（民間公開Web v3 §6）。**未決なら取得を始めない。**
+    # 「含みうるか」の欄は はい／いいえ／分からない（分からないは、はいとして扱う）。
+    # 保存・公開の予定と粒度は、中身を書いてあること（未確認・未決・分からない は未決）
+    for k in KOJIN_GATE_SANCHI:
+        if card.get(k) not in KOJIN:
+            nai.append("%s（はい／いいえ／分からない）" % k)
+    for k in KOJIN_GATE_KISAI:
+        v = str(card.get(k) or "").strip()
+        if not v or v in MIKETSU:
+            nai.append("%s（未決）" % k)
     if card.get("不確定事項") not in ("なし",):
         nai.append("不確定事項が「なし」でない")
     return nai

@@ -66,7 +66,11 @@ def yoi_card(**kae):
         "取得元": "ためしの一覧", "相手": "ためし県", "source種別": "行政",
         "対象URL": URL, "対象host": [HOST],
         "個人情報を含みうる": "分からない", "当事者に個人がありうる": "分からない",
-        "個票の粒度": "未確認", "所在地の扱い": "未確認",
+        "個票の粒度": "集計のみ（個票なし）", "所在地の扱い": "個人の所在地は無い",
+        "氏名を含みうる": "いいえ", "個人の電話番号を含みうる": "いいえ",
+        "個人の生活住所を含みうる": "いいえ",
+        "privateに保存する予定": "取得したページそのまま", "publicに出す予定": "件数の集計だけ",
+        "公開時の粒度": "市区町村・月ごとの件数",
         "規約確認日": "2026-09-20",
         "規約証跡": {"規約URL": "https://%s/kiyaku.html" % HOST},
         "正規提供手段": "無し", "正規提供手段の理由": "API も CSV も無い",
@@ -249,6 +253,34 @@ class 規約の門(Oki):
             f.write(subprocess.run(["git", "-C", self.root, "rev-parse", "HEAD"],
                                    capture_output=True, text=True).stdout)
         self.assertFalse(self.mon().shounin("tameshi")[0])
+
+    def test_個人情報と個票の取得前ゲートが未決なら取ってよいにならない(self):
+        """民間公開Web v3 §6。9つのどれかが未決なら、取得を始めない。"""
+        kaketa = {"当事者に個人がありうる": "", "氏名を含みうる": "未確認",
+                  "個人の電話番号を含みうる": None, "個人の生活住所を含みうる": "たぶん無い",
+                  "個票の粒度": "未確認", "所在地の扱い": "", "privateに保存する予定": "未決",
+                  "publicに出す予定": "分からない", "公開時の粒度": ""}
+        for k, v in kaketa.items():
+            with self.subTest(k=k):
+                c = yoi_card(**{k: v})
+                self.assertIn(k, "、".join(kado._kaketeiru(c)))
+                self.assertEqual(kado.seishiki_jotai(c, True), "規約未確定")
+        # 「分からない」は、含みうる側として決めたことになる（きつい側に扱う）
+        self.assertEqual(kado.seishiki_jotai(yoi_card(氏名を含みうる="分からない"), True), "取ってよい")
+
+    def test_肯定根拠4は行政と準公的だけ(self):
+        """4（行政等の公式な再利用条件）は民間には使えない（民間公開Web v3 §3 は3つに閉じている）。"""
+        for sh in ("民間一次", "二次・集約"):
+            with self.subTest(sh=sh):
+                self.assertEqual(kado.seishiki_jotai(
+                    yoi_card(肯定根拠番号="4", **{"source種別": sh}), True), "規約未確定")
+        for sh in ("行政", "準公的"):
+            self.assertEqual(kado.seishiki_jotai(
+                yoi_card(肯定根拠番号="4", **{"source種別": sh}), True), "取ってよい")
+        for n in ("1", "2", "3"):
+            self.assertEqual(kado.seishiki_jotai(
+                yoi_card(肯定根拠番号=n, **{"source種別": "民間一次"}), True), "取ってよい")
+        self.assertEqual(kado.seishiki_jotai(yoi_card(肯定根拠番号="5"), True), "規約未確定")
 
     def test_該当文言なしだけでは取ってよいにならない(self):
         self.cards["tameshi"] = yoi_card(判定理由="該当文言なし")
