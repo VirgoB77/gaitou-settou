@@ -1244,8 +1244,20 @@ class 予約台帳(Oki):
                 f.write("*.json filter=kaeru\n")
             git(d, "config", "filter.kaeru.clean", "sed s/tameshi.yml/kaeta.yml/")
 
+        def shikkou(d):
+            # 予約のファイルが「実行できるファイル」として入る形（通常のファイルの追加ではない）。
+            # 先に同じ名前を実行できる形で置いておく。fileMode を切ると、git add は置いてある形を保つ
+            michi = os.path.join("yoyaku", "2026-09-25", "tameshi-ken.json")
+            os.makedirs(os.path.join(d, "yoyaku", "2026-09-25"), exist_ok=True)
+            with open(os.path.join(d, michi), "w", encoding="utf-8") as f:
+                f.write("{}\n")
+            git(d, "config", "core.fileMode", "false")
+            git(d, "add", michi)
+            git(d, "update-index", "--chmod=+x", michi)
+
         for na, f in (("sakujo", sakujo), ("henkou", henkou), ("kaimei", kaimei),
-                      ("yoteigai", yotei_gai), ("yoteigaiato", yotei_gai_ato), ("readme", readme), ("nakami", nakami_ga_kawaru)):
+                      ("yoteigai", yotei_gai), ("yoteigaiato", yotei_gai_ato), ("readme", readme),
+                      ("nakami", nakami_ga_kawaru), ("shikkou", shikkou)):
             with self.subTest(na=na):
                 self.env = self.run_env(na)
                 f(self.env["YOYAKU_DIR"])
