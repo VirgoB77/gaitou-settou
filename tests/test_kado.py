@@ -1227,6 +1227,12 @@ class 予約台帳(Oki):
                 f.write("x\n")
             git(d, "add", "yotei-gai.txt")
 
+        def yotei_gai_ato(d):
+            # 予約のファイルより後ろに並ぶ名前（差分の並びで、予約が先頭に来る形）
+            with open(os.path.join(d, "zzz-yotei-gai.txt"), "w", encoding="utf-8") as f:
+                f.write("x\n")
+            git(d, "add", "zzz-yotei-gai.txt")
+
         def readme(d):
             with open(os.path.join(d, "README.md"), "a", encoding="utf-8") as f:
                 f.write("書き換え\n")
@@ -1239,7 +1245,7 @@ class 予約台帳(Oki):
             git(d, "config", "filter.kaeru.clean", "sed s/tameshi.yml/kaeta.yml/")
 
         for na, f in (("sakujo", sakujo), ("henkou", henkou), ("kaimei", kaimei),
-                      ("yoteigai", yotei_gai), ("readme", readme), ("nakami", nakami_ga_kawaru)):
+                      ("yoteigai", yotei_gai), ("yoteigaiato", yotei_gai_ato), ("readme", readme), ("nakami", nakami_ga_kawaru)):
             with self.subTest(na=na):
                 self.env = self.run_env(na)
                 f(self.env["YOYAKU_DIR"])
