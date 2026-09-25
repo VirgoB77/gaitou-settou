@@ -49,6 +49,36 @@ jobs:
           # 浅い（shallow）ままだと、承認を数えられない
           fetch-depth: 0
 
+      # **日付と開始時刻を、同じ1つの時刻から決める**（日本時間）。予約台帳（common/kado.py）は
+      # 開始が今日の日付か・23時台でないかを、この2つで見る
+      - name: この実行の日付と開始時刻を決める
+        run: |
+          t=$(TZ=Asia/Tokyo date +%Y-%m-%dT%H:%M:%S+09:00)
+          echo "RUN_DATE=${t%%T*}" >> "$GITHUB_ENV"
+          echo "RUN_HAJIME=${t}" >> "$GITHUB_ENV"
+
+      # 予約台帳（repo横断。同じ相手へ、同じ日本時間の日に、2つの置き場・2つの実行から行かない）。
+      # 門（common/kado.py）が、相手への最初の外部通信の直前に、ここへ予約を1つ書いて push する。
+      # **鍵が無い・出せないときは、ここで失敗して止まる**（予約できない回は、どこへも取りに行かない）
+      - name: 予約台帳の鍵があることの確認
+        env:
+          ARU: ${{ secrets.YOYAKU_DEPLOY_KEY != '' }}
+        run: |
+          [ "$ARU" = "true" ] || { echo "予約台帳の鍵（YOYAKU_DEPLOY_KEY）が無い。この回はどこへも取りに行かない"; exit 1; }
+
+      - name: 予約台帳を隣に出す
+        uses: actions/checkout@v4
+        with:
+          repository: VirgoB77/kujiraya-aite-yoyaku
+          ref: main
+          ssh-key: ${{ secrets.YOYAKU_DEPLOY_KEY }}
+          path: _yoyaku
+
+      - name: 予約台帳の場所を門に渡す
+        run: |
+          echo "YOYAKU_DIR=${GITHUB_WORKSPACE}/_yoyaku" >> "$GITHUB_ENV"
+          echo "YOYAKU_REPO=VirgoB77/kujiraya-aite-yoyaku" >> "$GITHUB_ENV"
+
       # 共通仕様9節「2本のリポジトリ」。生データ（県警CSV・e-Statの境界）は private の金庫に置き、
       # ここには伏せ処理を通した結果とページだけを残す。
       #

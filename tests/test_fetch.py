@@ -587,7 +587,9 @@ class GateBase(unittest.TestCase):
         self.kinko = tempfile.mkdtemp()
         os.makedirs(os.path.join(self.root, "data", "ref", "shounin"))
         self.cards = {"tameshi": yoi_card()}
-        self.daicho = {"aite": {"ためし県": {"host": [GHOST, GHOST2], "担当": REPO}}}
+        # 予約台帳（repo横断）は tests/test_kado.py の「予約台帳」で試す。ここでは要らないと書く
+        self.daicho = {"yoyaku": {"hitsuyou": False},
+                       "aite": {"ためし県": {"host": [GHOST, GHOST2], "担当": REPO}}}
         self.env = {"KINKO_DIR": self.kinko, "KINKO_PRIVATE": "1", "RUN_DATE": "2026-09-25"}
         self._kaku_all()
         git(self.root, "init", "-q")

@@ -7,3 +7,7 @@ __pycache__/
 .venv/
 .DS_Store
 Thumbs.db
+
+# 予約台帳（VirgoB77/kujiraya-aite-yoyaku・private）を Actions が隣に出す場所。
+# 手で git add -A したときに、予約台帳の中身がこちらに入るのを防ぐ
+_yoyaku/
