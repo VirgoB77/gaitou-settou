@@ -1162,6 +1162,18 @@ class 予約台帳(Oki):
             self.toru(self.mon(run_id="run-b"))   # 同じ日の別の実行は、もう行けない
         self.assertEqual(self.nise.kita, [])
 
+    def test_日付をまたいだ回は_予約台帳にも書かない(self):
+        """0時を越えてから初めてその相手へ行こうとした形。**予約を書く前に止まる**（翌日の枠を取らない）。"""
+        self.shounin()
+        self.env = self.run_env("a", hajime="2026-09-25T22:00:00+09:00")
+        mae = self.honsu()
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon(now=lambda: jikoku("2026-09-26", "00:00:05")))
+        self.assertEqual(self.nise.kita, [])
+        self.assertEqual(self.honsu(), mae)
+        self.assertIsNone(self.yoyaku_ni_aru())
+        self.assertIsNone(self.yoyaku_ni_aru(hi="2026-09-26"))
+
     def test_予約済みでも_日付をまたいだら出さない(self):
         """22時台に始まった回が、0時を越えたあと、予約を使い回して翌日の分を取りに行かない。"""
         self.shounin()
@@ -1379,6 +1391,16 @@ class 予約台帳(Oki):
         self.assertEqual(len(pushes), 1)
         # 送るのは、照合した自分の commit（mine）を main へ、の1通りだけ（頭に + を付けない）
         self.assertIn('"%s:refs/heads/main" % mine)', pushes[0])
+
+
+class 知らない使い方で止まる(unittest.TestCase):
+
+    def test_知らない引数なら終了コードが0でない(self):
+        for hikisu in (["--zzz-shiranai-hikisu"], [], ["ichiran"], ["ichiran", "a", "b", "c"]):
+            with self.subTest(hikisu=hikisu):
+                r = subprocess.run([sys.executable, os.path.join(HERE, "common", "kado.py")] + hikisu,
+                                   cwd=HERE, capture_output=True, text=True, timeout=60)
+                self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 class import_しただけで閉じる(unittest.TestCase):

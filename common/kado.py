@@ -1208,7 +1208,9 @@ def ichiran_kaku(root, repo, ua="kujiraya archive bot"):
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) >= 4 and sys.argv[1] == "ichiran":
+    if len(sys.argv) == 4 and sys.argv[1] == "ichiran":
         print(ichiran_kaku(sys.argv[2], sys.argv[3]))
     else:
-        print("使い方: python3 common/kado.py ichiran <置き場の根> <置き場の名前>")
+        # **知らない使い方は、終了コード0で終わらせない**（打ち間違いを「走った」と読ませない）
+        print("使い方: python3 common/kado.py ichiran <置き場の根> <置き場の名前>", file=sys.stderr)
+        sys.exit(2)
