@@ -98,7 +98,7 @@ SPEC_URL = "https://github.com/VirgoB77/ogataten-nippo/blob/main/docs/kyotsu-shi
 # ドメインは .com を使う（共通仕様2節）。
 #
 # SITE_ID は index.json の record id 1,698本の接頭辞になる。
-# 共通仕様9節「鍵には『あとから変わらない』と言い切れるものだけを入れる」。
+# 共通仕様9節「鍵にはあとから変わらないものだけを入れる」。
 # リポジトリ名は現に一度変わった（2026-09-17 の改名）ので鍵に向かない。
 # ドメインは買ってあるぶん最も動きにくいので、そちらに合わせる。
 SITE_ID = "gaitou-settou"
