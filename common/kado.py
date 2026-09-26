@@ -1208,9 +1208,10 @@ def ichiran_kaku(root, repo, ua="kujiraya archive bot"):
 
 if __name__ == "__main__":
     import sys
+    # **知らない引数で止める**（common/hikisu.py と同じ向き）。0 で終わると、
+    # 打ち間違いを workflow が「通った」と読む。余った語も知らない引数として止める
     if len(sys.argv) == 4 and sys.argv[1] == "ichiran":
         print(ichiran_kaku(sys.argv[2], sys.argv[3]))
     else:
-        # **知らない使い方は、終了コード0で終わらせない**（打ち間違いを「走った」と読ませない）
         print("使い方: python3 common/kado.py ichiran <置き場の根> <置き場の名前>", file=sys.stderr)
-        sys.exit(2)
+        raise SystemExit(2)
