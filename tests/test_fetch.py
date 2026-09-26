@@ -59,6 +59,8 @@ import config  # noqa: E402
 import fetch_data  # noqa: E402
 
 kado = fetch_data.kado
+# 偽の時計の基準（RUN_DATE 2026-09-25 の朝7時）。**門は外へ出す前に、いまの日本時間の日付を見る**
+ASA = __import__("datetime").datetime(2026, 9, 25, 7, tzinfo=kado.JST).timestamp()
 
 
 def make_zip(code, body=b"shape", comment=b""):
@@ -587,7 +589,9 @@ class GateBase(unittest.TestCase):
         self.kinko = tempfile.mkdtemp()
         os.makedirs(os.path.join(self.root, "data", "ref", "shounin"))
         self.cards = {"tameshi": yoi_card()}
-        self.daicho = {"aite": {"ためし県": {"host": [GHOST, GHOST2], "担当": REPO}}}
+        # 予約台帳（repo横断）は tests/test_kado.py の「予約台帳」で試す。ここでは要らないと書く
+        self.daicho = {"yoyaku": {"hitsuyou": False},
+                       "aite": {"ためし県": {"host": [GHOST, GHOST2], "担当": REPO}}}
         self.env = {"KINKO_DIR": self.kinko, "KINKO_PRIVATE": "1", "RUN_DATE": "2026-09-25"}
         self._kaku_all()
         git(self.root, "init", "-q")
@@ -621,7 +625,7 @@ class GateBase(unittest.TestCase):
         self.nise = Nise(kotae)
         self.naps = []
         return kado.Kado(self.root, REPO, UA, env=self.env, transport=self.nise,
-                         run_id="run-1", sleep=self.naps.append, now=lambda: 1000.0)
+                         run_id="run-1", sleep=self.naps.append, now=lambda: ASA + 1000.0)
 
     def kinko_raw(self):
         return os.path.join(self.kinko, "raw")

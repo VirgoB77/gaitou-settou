@@ -76,6 +76,14 @@ ROBOTS_OOKISA = 512000         # これより大きい robots.txt は読みき�
 KONDA = (429, 503)
 KOTOWARI = (401, 403)
 
+# 予約台帳（repo横断・同じ相手・同じ JST 日）。正本の相手台帳の "yoyaku" が要るかを決める
+YOYAKU_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")      # 相手ID は ASCII の固定ID
+YOYAKU_NINSHIKI = ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB")
+YOYAKU_SCHEMA = 1
+YOYAKU_MICHI = "yoyaku"          # 本番の予約の置き場。ダミー競合試験は "test"
+YOYAKU_KAISU = 5                 # push が通らないときに積み直す上限
+JST = datetime.timezone(datetime.timedelta(hours=9), "JST")
+
 CARD = os.path.join("data", "ref", "torimoto-card.json")
 SHOUNIN = os.path.join("data", "ref", "shounin")
 FUDA_PATH = os.path.join("data", "ref", "kikai-fuda.json")
@@ -439,12 +447,21 @@ def robots_hantei(status, ctype, body, cenc=""):
 
 # ------------------------------------------------------------------ 門
 class _RobotsTenSou(urllib.request.HTTPRedirectHandler):
-    """robots.txt の転送は、**同じ相手の /robots.txt へのもの**（http → https 等）だけ辿る。"""
+    """robots.txt の転送は、**同じ相手の /robots.txt へのもの**（http → https 等）だけ辿る。
+
+    転送の先へ出すのも1本の外部通信なので、出す前に日付の関所を通す（門が渡されていれば）。
+    """
     max_redirections = 5
+
+    def __init__(self, kado=None):
+        super().__init__()
+        self.kado = kado
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not robots_no_basho(req.full_url, newurl):
             return None                # よその場所へは辿らない（確かめられなかった）
+        if self.kado is not None:
+            self.kado.hi_no_seki()     # 日付をまたいでいたら、転送の先へは出さない
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -453,7 +470,7 @@ class Kado:
 
     def __init__(self, root, repo, ua, *, ua_tokens=None, today=None, run_id=None,
                  env=None, transport=None, sleep=time.sleep, now=time.time,
-                 robots_hikae=None):
+                 robots_hikae=None, yoyaku_michi=YOYAKU_MICHI):
         self.root = root
         self.repo = repo
         self.ua = ua
@@ -478,6 +495,11 @@ class Kado:
         cards = _yomu(self._p(CARD), {"cards": {}})
         self.cards = (cards or {}).get("cards") if isinstance(cards, dict) else None
         self.daicho = _yomu(self._p(DAICHO), None)
+        y = self.daicho.get("yoyaku") if isinstance(self.daicho, dict) else None
+        self.yoyaku = y if isinstance(y, dict) else None
+        self.yoyaku_michi = yoyaku_michi
+        self._yoyaku_ari = set()       # この処理で予約を証明できた相手
+        self._yoyaku_dame = {}         # 相手 -> 予約できなかった理由（この処理ではもう試さない）
 
     def _p(self, rel):
         return os.path.join(self.root, rel)
@@ -655,6 +677,13 @@ class Kado:
                 riyuu.append("この相手は今日「%s」と返した" % e.get("tomatta"))
         if aite in self._tomatta:
             riyuu.append("この回、この相手は「%s」で止めた" % self._tomatta[aite])
+        if self.yoyaku_hitsuyou() and a is not None:
+            # 予約の前提のうち、通信の要らないものは、ここで先に見る（予約そのものは最初の通信の直前）
+            why = self._yoyaku_mae(aite)
+            if why:
+                riyuu.append("予約台帳：" + why)
+            elif aite in self._yoyaku_dame:
+                riyuu.append("予約台帳：" + self._yoyaku_dame[aite])
         if not riyuu:
             riyuu += self.kinko_preflight(hozon_saki)
         return riyuu
@@ -675,12 +704,235 @@ class Kado:
             with self._lock:
                 self._genzai = mae
 
+    # ---------------------------------------------------------- 予約台帳（repo横断）
+    def yoyaku_hitsuyou(self):
+        """予約台帳が要るか。**書いていない・形が違うときは、要る側に倒す**（そのあと前提で止まる）。
+
+        要らないのは、正本の相手台帳が `"yoyaku": {"hitsuyou": false}` と書いたときだけ。置き場の側では外せない。
+        """
+        return not (isinstance(self.yoyaku, dict) and self.yoyaku.get("hitsuyou") is False)
+
+    def _yoyaku_ninshiki(self):
+        """この実行の識別（4つ全部）。どれかが無ければ None（予約できない）。"""
+        vals = [str(self.env.get(k) or "") for k in YOYAKU_NINSHIKI]
+        if not all(vals):
+            return None
+        return dict(zip(("repo", "run_id", "run_attempt", "job"), vals))
+
+    def _yoyaku_mae(self, aite):
+        """予約の前提のうち、ローカルで確かめられるもの。止める理由（空文字ならよい）。"""
+        if not isinstance(self.yoyaku, dict) or self.yoyaku.get("hitsuyou") is not True                 or not isinstance(self.yoyaku.get("repo"), str):
+            return "相手台帳に、予約台帳の決まり（yoyaku の hitsuyou・repo）が無い"
+        a = ((self.daicho or {}).get("aite") or {}).get(aite) or {}
+        aid = a.get("id") or ""
+        if not YOYAKU_ID.match(aid):
+            return "相手ID（ASCII の固定ID）が相手台帳に無い"
+        if self._yoyaku_ninshiki() is None:
+            return "この実行の識別（%s）がそろっていない" % "・".join(YOYAKU_NINSHIKI)
+        m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})T(\d{2}):\d{2}(?::\d{2})?\+09:?00",
+                         str(self.env.get("RUN_HAJIME") or ""))
+        if not m:
+            return "RUN_HAJIME（日本時間の開始時刻）が読めない"
+        if m.group(1) != self.today:
+            return "開始の日付（%s）と今日（%s）が違う" % (m.group(1), self.today)
+        if m.group(2) == "23":
+            return "日本時間23時台に始まった回は予約しない（日付をまたぐため）"
+        d = self.env.get("YOYAKU_DIR") or ""
+        if not d or not os.path.isdir(os.path.join(d, ".git")):
+            return "予約台帳の作業木（YOYAKU_DIR）が無い"
+        repo = str(self.yoyaku.get("repo") or "")
+        if not repo or self.env.get("YOYAKU_REPO") != repo:
+            return "予約台帳の名前（YOYAKU_REPO）が相手台帳と合わない"
+        return ""
+
+    def _yoyaku_yomu(self, d, michi, aid):
+        """origin/main の予約を読む。("無い", None) ／ ("在る", 中身) ／ ("読めない", 理由)。"""
+        r = _git(d, "ls-tree", "--name-only", "origin/main", "--", michi)
+        if r.returncode != 0:
+            return "読めない", "予約台帳の中を見られない"
+        if not r.stdout.strip():
+            return "無い", None
+        r = _git(d, "show", "origin/main:%s" % michi)
+        try:
+            s = json.loads(r.stdout) if r.returncode == 0 else None
+        except ValueError:
+            s = None
+        if not isinstance(s, dict) or s.get("schema") != YOYAKU_SCHEMA \
+                or s.get("hi") != self.today or s.get("aite") != aid \
+                or not all(s.get(k) for k in ("repo", "run_id", "run_attempt", "job")):
+            return "読めない", "予約のファイルの形が違う（%s）" % michi
+        return "在る", s
+
+    def _yoyaku_toru(self, aite):
+        """その相手の今日の予約を、この実行が持っていると証明する。止める理由（空文字ならよい）。
+
+        1. 取り込む（fetch）→ 2. 予約が在れば、この実行のものか見る → 3. 無ければ1つ書いて push
+        → 4. 取り込み直して、自分の予約が入っていることを確かめる。
+        push が通らなければ、取り込み直して 2. からやり直す（上限あり）。先頭の食い違いは
+        「[rejected]」でも「[remote rejected]（ref を取れない）」でも出るので、理由では選り分けない。
+        やり直しのたびに台帳を読み直すので、ほかの実行が先に取っていれば、そこで止まる。
+        **強制 push・上書き・削除はしない。予約は解放しない。**
+        """
+        why = self._yoyaku_mae(aite)
+        if why:
+            return why
+        d = self.env["YOYAKU_DIR"]
+        repo = self.yoyaku["repo"]
+        r = _git(d, "remote", "get-url", "origin")
+        url = r.stdout.strip().replace("\\", "/")
+        url = url[:-4] if url.endswith(".git") else url
+        if r.returncode != 0 or not (url.endswith("/" + repo) or url.endswith(":" + repo)):
+            return "予約台帳の作業木の取り込み先が違う"
+        aid = self.daicho["aite"][aite]["id"]
+        jibun = dict(self._yoyaku_ninshiki(), schema=YOYAKU_SCHEMA, hi=self.today, aite=aid,
+                     workflow=str(self.env.get("GITHUB_WORKFLOW_REF")
+                                  or self.env.get("GITHUB_WORKFLOW") or ""))
+        michi = "%s/%s/%s.json" % (self.yoyaku_michi, self.today, aid)
+        onaji = lambda s: all(s.get(k) == jibun[k] for k in ("repo", "run_id", "run_attempt", "job"))
+        nakami = json.dumps(jibun, ensure_ascii=False, sort_keys=True, indent=1) + "\n"
+        saigo = "予約の競合が %d 回続いた" % YOYAKU_KAISU
+        for _ in range(YOYAKU_KAISU):
+            if _git(d, "fetch", "--quiet", "origin", "main").returncode != 0:
+                return "予約台帳を取り込めない"
+            aru, s = self._yoyaku_yomu(d, michi, aid)
+            if aru == "読めない":
+                return s
+            if aru == "在る":
+                if onaji(s):
+                    return ""          # 同じ実行の後続（同じ job の別の .py）。自分の予約
+                return "今日はほかの実行が、この相手を予約している（%s）" % s.get("repo")
+            if _git(d, "checkout", "--quiet", "-B", "yoyaku-kaku", "origin/main").returncode != 0:
+                return "予約台帳の作業木をそろえられない"
+            moto = _git(d, "rev-parse", "--verify", "-q", "origin/main").stdout.strip()
+            if not moto:
+                return "予約台帳の先頭が読めない"
+            os.makedirs(os.path.join(d, os.path.dirname(michi)), exist_ok=True)
+            with open(os.path.join(d, michi), "w", encoding="utf-8", newline="\n") as f:
+                f.write(nakami)
+            if _git(d, "add", "--", michi).returncode != 0 or _git(
+                    d, "-c", "user.name=kujiraya-yoyaku", "-c", "user.email=yoyaku@kujiraya.invalid",
+                    "commit", "--quiet", "-m",
+                    "予約 %s %s %s#%s/%s/%s" % (self.today, aid, jibun["repo"], jibun["run_id"],
+                                              jibun["run_attempt"], jibun["job"])).returncode != 0:
+                return "予約を書けない（commit）"
+            mine = _git(d, "rev-parse", "--verify", "-q", "HEAD").stdout.strip()
+            why = self._yoyaku_tsuika_dake(d, mine, moto, michi, nakami)
+            if why:
+                return why             # **push しない**
+            p = _git(d, "push", "--quiet", "origin", "%s:refs/heads/main" % mine)
+            if p.returncode == 0:
+                if _git(d, "fetch", "--quiet", "origin", "main").returncode != 0:
+                    return "予約のあとで取り込み直せない"
+                if _git(d, "merge-base", "--is-ancestor", mine, "origin/main").returncode != 0:
+                    return "書いた予約が台帳に入っていない"
+                # 台帳に入った自分の commit が、追加1件だけのものか（push の前と同じ照合を、入ったあとにも）
+                why = self._yoyaku_tsuika_dake(d, mine, moto, michi, nakami)
+                if why:
+                    return "台帳に入った予約の commit：" + why
+                # 書いたあとで、自分の予約がだれかに変えられていないか
+                if _git(d, "diff", "--quiet", mine, "origin/main", "--", michi).returncode != 0:
+                    return "書いた予約が、あとから変えられた"
+                aru, s = self._yoyaku_yomu(d, michi, aid)
+                if aru != "在る" or not onaji(s):
+                    return "書いた予約を読み直せない"
+                return ""
+            err = (p.stderr or "").lower()
+            if not any(w in err for w in ("rejected", "fetch first", "cannot lock ref")):
+                saigo = "予約を push できない"
+            # 取り込み直して、同じ相手・同じ日が先に取られていないか見る
+        return saigo
+
+    def _yoyaku_tsuika_dake(self, d, rev, moto, michi, nakami):
+        """その commit が「予定の予約ファイル1件の追加だけ」か。止める理由（空文字ならよい）。
+
+        - 親はちょうど1つで、取り込んだ台帳の先頭（moto）であること
+        - 親との差分が、ちょうど1件「新しい通常のファイル michi の追加」であること。
+          改名・写しの見分けは**わざと切る**（見分けると、前の日の予約とよく似た新しい予約が「写し」と
+          出てしまう）。切ると、改名は「削除＋追加」の2件になるので、1件でないとして止まる
+        - 入ったバイトが、書くつもりだった中身（nakami）と同じであること
+        既存のファイルの変更・削除・改名、予定外のファイルの追加が1つでもあれば止める。
+        """
+        if not rev or not moto:
+            return "予約の commit が読めない"
+        r = _git(d, "rev-list", "--parents", "-n", "1", rev)
+        ids = r.stdout.split() if r.returncode == 0 else []
+        if len(ids) != 2 or ids[0] != rev:
+            return "予約の commit の親が1つでない"
+        if ids[1] != moto:
+            return "予約の commit の親が、取り込んだ台帳の先頭でない"
+        r = _git(d, "diff-tree", "-r", "-z", "--raw", "--no-commit-id", "--no-ext-diff",
+                 "--no-renames", moto, rev)
+        if r.returncode != 0:
+            return "予約の commit の差分が読めない"
+        kire = r.stdout.split("\0")
+        if kire and kire[-1] == "":
+            kire.pop()
+        if len(kire) != 2 or kire[1] != michi:
+            shurui = "・".join(sorted({x.split()[-1] for x in kire[0::2] if x.startswith(":")}))
+            return "予約の commit に、予定の1件の追加でないものが入っている（%d 件・%s）" % (
+                len(kire) // 2, shurui or "読めない")
+        m = re.fullmatch(r":000000 100644 0{7,64} ([0-9a-f]{7,64}) A", kire[0])
+        if not m:
+            return "予約の commit に、予定の1件の追加でないものが入っている"
+        b = _git(d, "cat-file", "blob", m.group(1))
+        if b.returncode != 0 or b.stdout != nakami:
+            return "予約の commit の中身が、書くつもりのものと違う"
+        return ""
+
+    def _yoyaku_shoumei(self, aite):
+        """最初の外部通信の直前に呼ぶ。予約を証明できなければ Tomeru。"""
+        if not self.yoyaku_hitsuyou():
+            return
+        if aite in self._yoyaku_ari:
+            return
+        if aite in self._yoyaku_dame:
+            raise Tomeru("予約台帳：" + self._yoyaku_dame[aite])
+        try:
+            why = self._yoyaku_toru(aite)
+        except (OSError, subprocess.SubprocessError) as e:
+            why = "予約台帳を扱えない（%s）" % type(e).__name__
+        if why:
+            self._yoyaku_dame[aite] = why
+            self.kiroku.append(("", aite, "予約できない", why))
+            raise Tomeru("予約台帳：" + why)
+        self._yoyaku_ari.add(aite)
+        self._kyou_kaku(aite, yoyaku="%s#%s/%s/%s" % tuple(
+            self._yoyaku_ninshiki()[k] for k in ("repo", "run_id", "run_attempt", "job")))
+        self.kiroku.append(("", aite, "予約した", ""))
+
     # ---------------------------------------------------------- URL ごとの関所
+    def hi_no_seki(self):
+        """外部通信の直前に呼ぶ。**いまの日本時間の日付が、この実行の日付（RUN_DATE）と同じか。**
+
+        日付は実行の最初に1回だけ決める（門は時計で日付を決めない）。ここで時計を見るのは、
+        日付をまたいだ回を**止める**ためだけ。22時台に始まって0時を越えた回が、翌日の分を
+        取りに行かない（予約済みの相手でも、robots.txt でも、転送の先でも）。食い違ったら Tomeru。
+        """
+        riyuu = ""
+        rd = self.env.get("RUN_DATE")
+        if self.today is None:
+            riyuu = "この実行の日付（RUN_DATE）が無い"
+        elif rd and rd != self.today:
+            riyuu = "RUN_DATE（%s）と、この実行の日付（%s）が違う" % (rd, self.today)
+        else:
+            ima = datetime.datetime.fromtimestamp(self._now(), JST).date().isoformat()
+            if ima != self.today:
+                riyuu = "日本時間の日付が変わった（この実行 %s・いま %s）。この回は、もう外へ出さない" % (
+                    self.today, ima)
+        if riyuu:
+            if not any(x[2] == "日付で止めた" for x in self.kiroku):
+                self.kiroku.append(("", "", "日付で止めた", riyuu))
+            raise Tomeru(riyuu)
+
     def _matsu(self, aite, delay=None):
         """同じ相手へは、前の1本から5秒（Crawl-delay が長ければそちら）空ける。
 
         **同じ回の別の処理（別の .py）が出した分も数える。** 最後に出した時刻は今日の控えに残す。
+        ここはその相手への外部通信の直前なので、**日付の関所と、予約台帳の予約をここで確かめる**
+        （robots.txt も本体も、転送の先も通る）。
         """
+        self.hi_no_seki()
+        self._yoyaku_shoumei(aite)
         w = max(MATSU, delay or 0)
         e = (self._kyou_yomu() or {}).get(aite) or {}
         t = self._saigo.get(aite)
@@ -690,6 +942,8 @@ class Kado:
             nokori = t + w - self._now()
             if nokori > 0:
                 self._sleep(nokori)
+        # 待ったあと、出す直前にもう一度（待つ間に0時を越えることがある。Crawl-delay は長いこともある）
+        self.hi_no_seki()
         self._saigo[aite] = self._now()
         self._kyou_kaku(aite, saigo=self._saigo[aite])
 
@@ -699,7 +953,7 @@ class Kado:
             return self._robots[key]
         url = "%s://%s/robots.txt" % (scheme, host)
         self._matsu(aite)              # robots.txt を見に行くのも、その相手への1観測に数える
-        handlers = [_RobotsTenSou()]
+        handlers = [_RobotsTenSou(self)]
         if self.transport is not None:
             handlers.insert(0, self.transport)
         op = urllib.request.build_opener(*handlers)
@@ -858,7 +1112,10 @@ class Kado:
             return None, "相手台帳に無い host"
         if aite in self._tomatta:
             return None, "この回、この相手は止めた"
-        jotai, rules, _, why = self._robots_toru(u.scheme, (u.hostname or "").lower(), aite)
+        try:
+            jotai, rules, _, why = self._robots_toru(u.scheme, (u.hostname or "").lower(), aite)
+        except Tomeru as e:            # 予約台帳で止めた等。**通信は出ていない**
+            return None, "／".join(e.riyuu)
         if jotai == "拒否":
             return False, why
         if jotai != "通す":
@@ -951,7 +1208,10 @@ def ichiran_kaku(root, repo, ua="kujiraya archive bot"):
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) >= 4 and sys.argv[1] == "ichiran":
+    # **知らない引数で止める**（common/hikisu.py と同じ向き）。0 で終わると、
+    # 打ち間違いを workflow が「通った」と読む。余った語も知らない引数として止める
+    if len(sys.argv) == 4 and sys.argv[1] == "ichiran":
         print(ichiran_kaku(sys.argv[2], sys.argv[3]))
     else:
-        print("使い方: python3 common/kado.py ichiran <置き場の根> <置き場の名前>")
+        print("使い方: python3 common/kado.py ichiran <置き場の根> <置き場の名前>", file=sys.stderr)
+        raise SystemExit(2)

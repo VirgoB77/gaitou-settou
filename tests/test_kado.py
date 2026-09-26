@@ -6,6 +6,7 @@
     python3 -m unittest tests.test_kado
 """
 import contextlib
+import datetime
 import email.message
 import io
 import json
@@ -14,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -27,6 +29,15 @@ UA = "kujiraya archive bot (+https://example.invalid/about; https://example.inva
 REPO = "tameshi-repo"
 HOST = "www.example.lg.jp"
 URL = "https://%s/data/list.html" % HOST
+
+
+def jikoku(hi="2026-09-25", ji="07:00:00"):
+    """日本時間のその時刻（epoch 秒）。偽の時計に使う。"""
+    return datetime.datetime.fromisoformat("%sT%s+09:00" % (hi, ji)).timestamp()
+
+
+# 偽の時計の基準（この検査の RUN_DATE 2026-09-25 の朝7時）。**門は外へ出す前に、いまの日付を見る**
+ASA = jikoku()
 
 
 class Nise(urllib.request.BaseHandler):
@@ -103,7 +114,8 @@ class Oki(unittest.TestCase):
         self.kinko = tempfile.mkdtemp()
         os.makedirs(os.path.join(self.root, "data", "ref", "shounin"))
         self.cards = {"tameshi": yoi_card()}
-        self.daicho = {"aite": {"ためし県": {"host": [HOST], "担当": REPO}}}
+        # 予約台帳は下の「予約台帳」で試す。ここでは要らないと書く（書かなければ、要る側に倒れる）
+        self.daicho = {"yoyaku": {"hitsuyou": False}, "aite": {"ためし県": {"host": [HOST], "担当": REPO}}}
         self.env = {"KINKO_DIR": self.kinko, "KINKO_PRIVATE": "1", "RUN_DATE": "2026-09-25"}
         self.kaku_all()
         git(self.root, "init", "-q")
@@ -144,7 +156,7 @@ class Oki(unittest.TestCase):
         self.naps = []
         return kado.Kado(self.root, REPO, UA, env=self.env, transport=self.nise,
                          run_id=kw.pop("run_id", "run-1"), sleep=self.naps.append,
-                         now=kw.pop("now", lambda: 1000.0), **kw)
+                         now=kw.pop("now", lambda: ASA + 1000.0), **kw)
 
     def toru(self, k, cid="tameshi", url=URL):
         k.install()
@@ -422,8 +434,8 @@ class 相手台帳と頻度(Oki):
 
     def test_同じ回の別の処理は続けて見られる_5秒あける(self):
         self.shounin()
-        self.toru(self.mon(run_id="run-1", now=lambda: 1000.0))
-        k2 = self.mon(run_id="run-1", now=lambda: 1001.0)
+        self.toru(self.mon(run_id="run-1", now=lambda: ASA + 1000.0))
+        k2 = self.mon(run_id="run-1", now=lambda: ASA + 1001.0)
         self.toru(k2)
         self.assertTrue(self.naps and max(self.naps) >= 4.0)
 
@@ -679,7 +691,7 @@ class robotsのバイト(Oki):
         self.nise = Nise({"https://%s/robots.txt" % HOST: (200, {"Content-Type": "text/plain"}, 生),
                           URL: HONBUN})
         k = kado.Kado(self.root, REPO, UA, env=self.env, transport=self.nise, run_id="run-h",
-                      sleep=lambda s: None, now=lambda: 1000.0, robots_hikae=hikae)
+                      sleep=lambda s: None, now=lambda: ASA + 1000.0, robots_hikae=hikae)
         k.install()
         with k.sesshon("tameshi", hozon_saki=os.path.join(self.kinko, "raw")):
             urllib.request.urlopen(URL, timeout=5).read()
@@ -694,7 +706,7 @@ class robotsのバイト(Oki):
         soto = os.path.join(self.root, "data", "raw", "_robots")
         k = kado.Kado(self.root, REPO, UA, env=self.env, transport=Nise({
             "https://%s/robots.txt" % HOST: ROBOTS_OK, URL: HONBUN}), run_id="run-s",
-            sleep=lambda s: None, now=lambda: 1000.0, robots_hikae=soto)
+            sleep=lambda s: None, now=lambda: ASA + 1000.0, robots_hikae=soto)
         k.install()
         with k.sesshon("tameshi", hozon_saki=os.path.join(self.kinko, "raw")):
             urllib.request.urlopen(URL, timeout=5).read()
@@ -845,6 +857,568 @@ class 一覧(Oki):
     def test_読んだ日の無い取ってよいは候補にしない(self):
         self.assertFalse(kado.koho_ka({"移行元": {"旧値": "取ってよい", "根拠": "x", "在りか": "y"}}))
         self.assertFalse(kado.koho_ka({"移行元": {"旧値": "未確認", "確認日": "2026-09-21", "根拠": "x", "在りか": "y"}}))
+
+
+YOYAKU_REPO = "VirgoB77/kujiraya-aite-yoyaku"
+
+# 別のプロセス（＝別の実行）として予約だけを試す。**合図のファイルが出るまで待ってから一斉に**
+KYOUSOU = r'''
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+from common import kado
+root, hi, aite, junbi, go = sys.argv[2:7]
+k = kado.Kado(root, "tameshi-repo", "kujiraya archive bot", today=hi)
+open(junbi, "w").close()
+while not os.path.exists(go):
+    time.sleep(0.002)
+try:
+    k._yoyaku_shoumei(aite)
+    print("TOTTA")
+except kado.Tomeru as e:
+    print("TORENAI " + str(e))
+'''
+
+
+class ToriniKitaraTokeiWoSusumeru(dict):
+    """偽の相手の答え。決めた URL が来たら、偽の時計を進める（途中で0時を越えた形を作る）。"""
+
+    def __init__(self, kotae, tokei, url, saki):
+        super().__init__(kotae)
+        self.tokei, self.url, self.saki = tokei, url, saki
+
+    def get(self, k, default=None):
+        if k == self.url:
+            self.tokei[0] = self.saki
+        return super().get(k, default)
+
+
+class 日付の関所(Oki):
+    """外へ出す直前に、**いまの日本時間の日付が RUN_DATE と同じか**を見る。違えば、そこから先は出さない。"""
+
+    def test_日付をまたいでいたら_robotstxtも出さない(self):
+        self.shounin()
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon(now=lambda: jikoku("2026-09-26", "00:00:05")))
+        self.assertEqual(self.nise.kita, [])
+
+    def test_走っている途中で0時を越えたら_そこから先は出さない(self):
+        self.shounin()
+        tokei = [jikoku("2026-09-25", "23:59:50")]
+        u2 = "https://%s/data/two.html" % HOST
+        k = self.mon({"https://%s/robots.txt" % HOST: ROBOTS_OK, URL: HONBUN, u2: HONBUN},
+                     now=lambda: tokei[0])
+        self.assertEqual(self.toru(k), b"<html>ok</html>")
+        kita = list(self.nise.kita)
+        tokei[0] = jikoku("2026-09-26", "00:00:01")
+        with self.assertRaises(kado.Tomeru):
+            self.toru(k, url=u2)
+        self.assertEqual(self.nise.kita, kita)
+        self.assertTrue(any(x[2] == "日付で止めた" for x in k.kiroku))
+
+    def test_待っている間に0時を越えたら_出さない(self):
+        """同じ相手へ続けて出すときの待ち（5秒・Crawl-delay）の間に日付が変わった形。"""
+        self.shounin()
+        tokei = [jikoku("2026-09-25", "23:59:50")]    # robots.txt → 5秒 → 本体 → 5秒 → 0時
+        u2 = "https://%s/data/two.html" % HOST
+        nise = Nise({"https://%s/robots.txt" % HOST: ROBOTS_OK, URL: HONBUN, u2: HONBUN})
+        k = kado.Kado(self.root, REPO, UA, env=self.env, transport=nise, run_id="run-1",
+                      now=lambda: tokei[0],
+                      sleep=lambda n: tokei.__setitem__(0, tokei[0] + n))
+        self.nise = nise
+        self.assertEqual(self.toru(k), b"<html>ok</html>")
+        kita = list(nise.kita)
+        with self.assertRaises(kado.Tomeru):
+            self.toru(k, url=u2)       # 5秒待つ → 0時を越える
+        self.assertEqual(nise.kita, kita)
+        self.assertGreaterEqual(tokei[0], jikoku("2026-09-26", "00:00:00"))
+
+    def test_転送の先へも_日付を見てから出す(self):
+        self.shounin()
+        tokei = [jikoku("2026-09-25", "23:59:58")]
+        u2 = "https://%s/data/two.html" % HOST
+        kotae = ToriniKitaraTokeiWoSusumeru(
+            {"https://%s/robots.txt" % HOST: ROBOTS_OK, URL: (302, {"Location": u2}, b""), u2: HONBUN},
+            tokei, URL, jikoku("2026-09-26", "00:00:01"))
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon(kotae, now=lambda: tokei[0]))
+        self.assertNotIn(u2, self.nise.kita)
+
+    def test_robotstxtの転送の先へも_日付を見てから出す(self):
+        self.shounin()
+        tokei = [jikoku("2026-09-25", "23:59:58")]
+        rb = "https://%s/robots.txt" % HOST
+        rb2 = "http://%s/robots.txt" % HOST
+        kotae = ToriniKitaraTokeiWoSusumeru(
+            {rb: (301, {"Location": rb2}, b""), rb2: ROBOTS_OK, URL: HONBUN},
+            tokei, rb, jikoku("2026-09-26", "00:00:01"))
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon(kotae, now=lambda: tokei[0]))
+        self.assertEqual(self.nise.kita, [rb])
+
+    def test_同じ日の転送は辿れる(self):
+        """日付の関所は、日付が同じなら転送を止めない（止めすぎていないことの確かめ）。"""
+        self.shounin()
+        rb = "https://%s/robots.txt" % HOST
+        rb2 = "http://%s/robots.txt" % HOST
+        self.assertEqual(self.toru(self.mon({rb: (301, {"Location": rb2}, b""), rb2: ROBOTS_OK,
+                                             URL: HONBUN})), b"<html>ok</html>")
+        self.assertEqual(self.nise.kita, [rb, rb2, URL])
+
+    def test_RUN_DATEと実行の日付が違えば止まる(self):
+        self.shounin()
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon(today="2026-09-24", now=lambda: jikoku("2026-09-24", "10:00:00")))
+        self.assertEqual(self.nise.kita, [])
+
+
+class 予約台帳(Oki):
+    """repo横断・同じ相手・同じ JST 日の予約。**台帳は一時フォルダの bare repo。外へは出ない。**"""
+
+    def setUp(self):
+        super().setUp()
+        self.gh = tempfile.mkdtemp()
+        self.bare = os.path.join(self.gh, "VirgoB77", "kujiraya-aite-yoyaku.git").replace("\\", "/")
+        os.makedirs(self.bare)
+        git(self.bare, "init", "-q", "--bare", "-b", "main")
+        tane = os.path.join(self.gh, "tane")
+        subprocess.run(["git", "clone", "-q", self.bare, tane], check=True, capture_output=True)
+        with open(os.path.join(tane, "README.md"), "w", encoding="utf-8") as f:
+            f.write("予約台帳\n")
+        git(tane, "add", "-A")
+        git(tane, "commit", "-q", "-m", "はじめ")
+        git(tane, "push", "-q", "origin", "HEAD:refs/heads/main")
+        self.tane = tane
+        self.daicho = {"yoyaku": {"repo": YOYAKU_REPO, "hitsuyou": True},
+                       "aite": {"ためし県": {"host": [HOST], "担当": REPO, "id": "tameshi-ken"},
+                                "ためし市": {"host": ["www.example-shi.lg.jp"], "担当": REPO,
+                                           "id": "tameshi-shi"}}}
+        self.kaku_all()
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "予約台帳つきの相手台帳")
+        self.env = self.run_env("a")
+
+    def tearDown(self):
+        for r, _, fs in os.walk(self.gh):              # git の中身は読み取り専用（Windows では消せない）
+            for n in fs:
+                os.chmod(os.path.join(r, n), 0o666)
+        shutil.rmtree(self.gh, ignore_errors=True)
+        super().tearDown()
+
+    def clone(self, na):
+        d = os.path.join(self.gh, "run-" + na)
+        if not os.path.isdir(d):
+            subprocess.run(["git", "clone", "-q", self.bare, d], check=True, capture_output=True)
+        return d
+
+    def run_env(self, na, job="shutoku", attempt="1", hajime="2026-09-25T07:00:05+09:00", **kae):
+        e = {"KINKO_DIR": self.kinko, "KINKO_PRIVATE": "1", "RUN_DATE": "2026-09-25",
+             "RUN_HAJIME": hajime, "YOYAKU_DIR": self.clone(na), "YOYAKU_REPO": YOYAKU_REPO,
+             "GITHUB_REPOSITORY": "VirgoB77/" + REPO, "GITHUB_RUN_ID": "run-" + na,
+             "GITHUB_RUN_ATTEMPT": attempt, "GITHUB_JOB": job,
+             "GITHUB_WORKFLOW_REF": "VirgoB77/%s/.github/workflows/tameshi.yml@refs/heads/main" % REPO}
+        e.update(kae)
+        return e
+
+    def yoyaku_ni_aru(self, hi="2026-09-25", aid="tameshi-ken", michi="yoyaku"):
+        subprocess.run(["git", "-C", self.tane, "pull", "-q", "origin", "main"], capture_output=True)
+        p = os.path.join(self.tane, michi, hi, aid + ".json")
+        return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else None
+
+    def honsu(self):
+        r = subprocess.run(["git", "-C", self.bare, "rev-list", "--count", "main"],
+                           capture_output=True, text=True)
+        return int(r.stdout.strip())
+
+    def test_予約が取れたら通信へ進み_予約が台帳に残る(self):
+        self.shounin()
+        self.assertEqual(self.toru(self.mon()), b"<html>ok</html>")
+        s = self.yoyaku_ni_aru()
+        self.assertEqual((s["schema"], s["hi"], s["aite"], s["run_id"], s["run_attempt"], s["job"]),
+                         (1, "2026-09-25", "tameshi-ken", "run-a", "1", "shutoku"))
+        self.assertEqual(s["repo"], "VirgoB77/" + REPO)
+
+    def test_ほかの実行が今日の予約を持っていれば止まる_通信は出ない(self):
+        self.shounin()
+        self.env = self.run_env("b")
+        self.toru(self.mon(run_id="run-b"))
+        self.env = self.run_env("a")
+        k = self.mon(run_id="run-a")
+        os.remove(self.p("data/ref/aite-kyou.json"))       # 置き場の中の控えが無くても、台帳で止まる
+        with self.assertRaises(kado.Tomeru):
+            self.toru(k)
+        self.assertEqual(self.nise.kita, [])
+
+    def test_同じ実行の後続は予約を使い回す(self):
+        self.shounin()
+        self.toru(self.mon(run_id="run-a"))
+        n = self.honsu()
+        self.env = self.run_env("a2", GITHUB_RUN_ID="run-a")     # 同じ job の別の処理（作業木は別）
+        self.assertEqual(self.toru(self.mon(run_id="run-a")), b"<html>ok</html>")
+        self.assertEqual(self.honsu(), n)                      # 予約は増えていない
+
+    def test_attemptかjobが違えば別の実行として止まる(self):
+        for kae in ({"attempt": "2"}, {"job": "betsu-no-job"}):
+            with self.subTest(kae=kae):
+                self.setUp()
+                self.shounin()
+                self.toru(self.mon(run_id="run-a"))
+                self.env = self.run_env("a3", GITHUB_RUN_ID="run-a", **kae)
+                if os.path.exists(self.p("data/ref/aite-kyou.json")):
+                    os.remove(self.p("data/ref/aite-kyou.json"))
+                with self.assertRaises(kado.Tomeru):
+                    self.toru(self.mon(run_id="run-a-betsu"))
+                self.assertEqual(self.nise.kita, [])
+
+    def test_前提が欠ければ通信の前に止まり_台帳にも触らない(self):
+        self.shounin()
+        n = self.honsu()
+        kesu = {"RUN_HAJIME": None, "GITHUB_JOB": None, "GITHUB_RUN_ATTEMPT": None,
+                "YOYAKU_DIR": None, "YOYAKU_REPO": None}
+        for k, v in list(kesu.items()) + [("RUN_HAJIME", "2026-09-25T23:10:00+09:00"),
+                                          ("RUN_HAJIME", "2026-09-24T07:00:00+09:00"),
+                                          ("RUN_HAJIME", "2026-09-25T07:00:00Z"),
+                                          ("YOYAKU_REPO", "VirgoB77/betsu")]:
+            with self.subTest(k=k, v=v):
+                self.env = self.run_env("a")
+                if v is None:
+                    del self.env[k]
+                else:
+                    self.env[k] = v
+                kd = self.mon()
+                self.assertTrue(any("予約台帳" in r for r in kd.card_mon(
+                    "tameshi", hozon_saki=os.path.join(self.kinko, "raw"))))
+                with self.assertRaises(kado.Tomeru):
+                    self.toru(kd)
+                self.assertEqual(self.nise.kita, [])
+        self.assertEqual(self.honsu(), n)
+
+    def test_相手IDが無ければ止まる(self):
+        del self.daicho["aite"]["ためし県"]["id"]
+        self.kaku_all()
+        git(self.root, "commit", "-qam", "id を消す")
+        self.shounin()
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon())
+        self.assertEqual(self.nise.kita, [])
+
+    def test_台帳が違う_取り込めない_pushできないと止まる(self):
+        self.shounin()
+        # 取り込み先が別の repo
+        betsu = os.path.join(self.gh, "betsu.git").replace("\\", "/")
+        subprocess.run(["git", "clone", "-q", "--bare", self.bare, betsu], check=True, capture_output=True)
+        d = os.path.join(self.gh, "run-x")
+        subprocess.run(["git", "clone", "-q", betsu, d], check=True, capture_output=True)
+        self.env = self.run_env("a", YOYAKU_DIR=d)
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon(run_id="x"))
+        self.assertEqual(self.nise.kita, [])
+        # push の先が無い（取り込みはできる）
+        self.env = self.run_env("p")
+        git(self.env["YOYAKU_DIR"], "remote", "set-url", "--push", "origin",
+            os.path.join(self.gh, "nai", "VirgoB77", "kujiraya-aite-yoyaku.git").replace("\\", "/"))
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon(run_id="p"))
+        self.assertEqual(self.nise.kita, [])
+        self.assertIsNone(self.yoyaku_ni_aru())
+        # push は通るのに、台帳には入らない（別の置き場へ書いた）。書いたあとの読み直しで止まる
+        otori = os.path.join(self.gh, "otori", "VirgoB77", "kujiraya-aite-yoyaku.git").replace("\\", "/")
+        os.makedirs(otori)
+        git(otori, "init", "-q", "--bare", "-b", "main")
+        self.env = self.run_env("o")
+        git(self.env["YOYAKU_DIR"], "remote", "set-url", "--push", "origin", otori)
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon(run_id="o"))
+        self.assertEqual(self.nise.kita, [])
+        self.assertIsNone(self.yoyaku_ni_aru())
+        # 台帳そのものが無い（取り込めない）
+        self.env = self.run_env("f")
+        os.rename(self.bare, self.bare + ".kieta")      # Windows では git の中身をすぐ消せないので、場所を変える
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon(run_id="f"))
+        self.assertEqual(self.nise.kita, [])
+
+    def test_読めない予約のファイルがあれば止まる(self):
+        self.shounin()
+        d = os.path.join(self.tane, "yoyaku", "2026-09-25")
+        os.makedirs(d)
+        with open(os.path.join(d, "tameshi-ken.json"), "w", encoding="utf-8") as f:
+            f.write("{こわれている")
+        git(self.tane, "add", "-A")
+        git(self.tane, "commit", "-q", "-m", "こわれた予約")
+        git(self.tane, "push", "-q", "origin", "HEAD:refs/heads/main")
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon())
+        self.assertEqual(self.nise.kita, [])
+
+    def test_予約は解放しない_失敗した実行の予約も残る(self):
+        self.shounin()
+        k = self.mon({"https://%s/robots.txt" % HOST: (403, {}, b""), URL: HONBUN}, run_id="run-a")
+        with self.assertRaises(kado.Tomeru):
+            self.toru(k)                          # robots で止まった（予約は取ってある）
+        self.assertIsNotNone(self.yoyaku_ni_aru())
+        os.remove(self.p("data/ref/aite-kyou.json"))       # 置き場の中の控えが無くても、台帳で止まる
+        self.env = self.run_env("b")
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon(run_id="run-b"))   # 同じ日の別の実行は、もう行けない
+        self.assertEqual(self.nise.kita, [])
+
+    def test_日付をまたいだ回は_予約台帳にも書かない(self):
+        """0時を越えてから初めてその相手へ行こうとした形。**予約を書く前に止まる**（翌日の枠を取らない）。"""
+        self.shounin()
+        self.env = self.run_env("a", hajime="2026-09-25T22:00:00+09:00")
+        mae = self.honsu()
+        with self.assertRaises(kado.Tomeru):
+            self.toru(self.mon(now=lambda: jikoku("2026-09-26", "00:00:05")))
+        self.assertEqual(self.nise.kita, [])
+        self.assertEqual(self.honsu(), mae)
+        self.assertIsNone(self.yoyaku_ni_aru())
+        self.assertIsNone(self.yoyaku_ni_aru(hi="2026-09-26"))
+
+    def test_予約済みでも_日付をまたいだら出さない(self):
+        """22時台に始まった回が、0時を越えたあと、予約を使い回して翌日の分を取りに行かない。"""
+        self.shounin()
+        self.env = self.run_env("a", hajime="2026-09-25T22:00:00+09:00")
+        tokei = [jikoku("2026-09-25", "23:59:50")]
+        self.assertEqual(self.toru(self.mon(now=lambda: tokei[0])), b"<html>ok</html>")
+        kita = list(self.nise.kita)
+        tokei[0] = jikoku("2026-09-26", "00:00:05")
+        k2 = self.mon(now=lambda: tokei[0])          # 同じ実行の後続（予約を使い回す道）
+        self.nise.kita = kita
+        with self.assertRaises(kado.Tomeru):
+            self.toru(k2)
+        self.assertEqual(self.nise.kita, kita)
+        self.assertIsNotNone(self.yoyaku_ni_aru())
+        self.assertIsNone(self.yoyaku_ni_aru(hi="2026-09-26"))
+
+    def betsu_no_yoyaku(self):
+        """台帳に、前の日の予約を1つ置く（消す・変える・改名する相手）。"""
+        d = os.path.join(self.tane, "yoyaku", "2026-09-24")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "tameshi-shi.json"), "w", encoding="utf-8", newline="\n") as f:
+            json.dump({"schema": 1, "hi": "2026-09-24", "aite": "tameshi-shi", "repo": "VirgoB77/betsu",
+                       "run_id": "9", "run_attempt": "1", "job": "j", "workflow": ""}, f)
+        git(self.tane, "add", "-A")
+        git(self.tane, "commit", "-q", "-m", "前の日の予約")
+        git(self.tane, "push", "-q", "origin", "HEAD:refs/heads/main")
+        return "yoyaku/2026-09-24/tameshi-shi.json"
+
+    def ki(self):
+        r = subprocess.run(["git", "-C", self.bare, "ls-tree", "-r", "main"], capture_output=True, text=True)
+        return r.stdout
+
+    def test_予約のcommitに_予定の1件の追加でないものが混ざれば_pushしない(self):
+        self.shounin()
+        mae_no = self.betsu_no_yoyaku()
+        mae_ki, mae_honsu = self.ki(), self.honsu()
+
+        def sakujo(d):
+            git(d, "rm", "-q", mae_no)
+
+        def henkou(d):
+            with open(os.path.join(d, mae_no), "a", encoding="utf-8") as f:
+                f.write("\n")
+            git(d, "add", mae_no)
+
+        def kaimei(d):
+            git(d, "mv", mae_no, "yoyaku/2026-09-24/tameshi-shi2.json")
+
+        def yotei_gai(d):
+            with open(os.path.join(d, "yotei-gai.txt"), "w", encoding="utf-8") as f:
+                f.write("x\n")
+            git(d, "add", "yotei-gai.txt")
+
+        def yotei_gai_ato(d):
+            # 予約のファイルより後ろに並ぶ名前（差分の並びで、予約が先頭に来る形）
+            with open(os.path.join(d, "zzz-yotei-gai.txt"), "w", encoding="utf-8") as f:
+                f.write("x\n")
+            git(d, "add", "zzz-yotei-gai.txt")
+
+        def readme(d):
+            with open(os.path.join(d, "README.md"), "a", encoding="utf-8") as f:
+                f.write("書き換え\n")
+            git(d, "add", "README.md")
+
+        def nakami_ga_kawaru(d):
+            # 入れるときにバイトを変える仕掛け（clean フィルタ）。予定と違うバイトが台帳に入る形
+            with open(os.path.join(d, ".git", "info", "attributes"), "w", encoding="utf-8") as f:
+                f.write("*.json filter=kaeru\n")
+            git(d, "config", "filter.kaeru.clean", "sed s/tameshi.yml/kaeta.yml/")
+
+        def shikkou(d):
+            # 予約のファイルが「実行できるファイル」として入る形（通常のファイルの追加ではない）。
+            # 先に同じ名前を実行できる形で置いておく。fileMode を切ると、git add は置いてある形を保つ
+            michi = os.path.join("yoyaku", "2026-09-25", "tameshi-ken.json")
+            os.makedirs(os.path.join(d, "yoyaku", "2026-09-25"), exist_ok=True)
+            with open(os.path.join(d, michi), "w", encoding="utf-8") as f:
+                f.write("{}\n")
+            git(d, "config", "core.fileMode", "false")
+            git(d, "add", michi)
+            git(d, "update-index", "--chmod=+x", michi)
+
+        for na, f in (("sakujo", sakujo), ("henkou", henkou), ("kaimei", kaimei),
+                      ("yoteigai", yotei_gai), ("yoteigaiato", yotei_gai_ato), ("readme", readme),
+                      ("nakami", nakami_ga_kawaru), ("shikkou", shikkou)):
+            with self.subTest(na=na):
+                self.env = self.run_env(na)
+                f(self.env["YOYAKU_DIR"])
+                with self.assertRaises(kado.Tomeru):
+                    self.toru(self.mon(run_id="run-" + na))
+                self.assertEqual(self.nise.kita, [])
+                self.assertEqual(self.ki(), mae_ki)          # 台帳は1バイトも変わらない
+                self.assertEqual(self.honsu(), mae_honsu)
+        self.assertIsNone(self.yoyaku_ni_aru())
+
+    def test_予約のcommitの親が台帳の先頭でなければ_pushしない(self):
+        """間に余分な commit（中身は空）が挟まった形。差分は1件の追加でも、送る commit が2つになる。"""
+        self.shounin()
+        mae_ki, mae_honsu = self.ki(), self.honsu()
+        moto_git = kado._git
+
+        def git_kawari(root, *args):
+            r = moto_git(root, *args)
+            if args[:3] == ("checkout", "--quiet", "-B") and r.returncode == 0:
+                moto_git(root, "-c", "user.name=x", "-c", "user.email=x@x.invalid",
+                         "commit", "--quiet", "--allow-empty", "-m", "よけい")
+            return r
+
+        kado._git = git_kawari
+        try:
+            with self.assertRaises(kado.Tomeru) as c:
+                self.toru(self.mon())
+        finally:
+            kado._git = moto_git
+        self.assertIn("親", str(c.exception))
+        self.assertEqual(self.nise.kita, [])
+        self.assertEqual((self.ki(), self.honsu()), (mae_ki, mae_honsu))
+
+    def test_書いた予約があとから変えられたら止まる(self):
+        """push のあと、取り込み直すまでの間に、だれかが自分の予約を書き換えた形。"""
+        self.shounin()
+        moto_git = kado._git
+        jotai = {"pushed": False, "kaeta": False}
+        kaeru = os.path.join(self.gh, "kaeru")
+
+        def git_kawari(root, *args):
+            if args and args[0] == "push":
+                r = moto_git(root, *args)
+                jotai["pushed"] = r.returncode == 0
+                return r
+            if args and args[0] == "fetch" and jotai["pushed"] and not jotai["kaeta"]:
+                jotai["kaeta"] = True
+                subprocess.run(["git", "clone", "-q", self.bare, kaeru], check=True, capture_output=True)
+                p = os.path.join(kaeru, "yoyaku", "2026-09-25", "tameshi-ken.json")
+                s = json.load(open(p, encoding="utf-8"))
+                s["workflow"] = "かきかえ"                   # 実行の識別はそのまま（読み直しでは気づけない形）
+                with open(p, "w", encoding="utf-8", newline="\n") as f:
+                    json.dump(s, f, ensure_ascii=False)
+                git(kaeru, "commit", "-qam", "かきかえ")
+                git(kaeru, "push", "-q", "origin", "HEAD:refs/heads/main")
+            return moto_git(root, *args)
+
+        kado._git = git_kawari
+        try:
+            with self.assertRaises(kado.Tomeru) as c:
+                self.toru(self.mon())
+        finally:
+            kado._git = moto_git
+        self.assertTrue(jotai["kaeta"])
+        self.assertIn("あとから変えられた", str(c.exception))
+        self.assertEqual(self.nise.kita, [])
+
+    def test_予約台帳の決まりが無い_形が違えば止まる(self):
+        self.shounin()
+        for yoyaku in (None, "要る", {}, {"repo": YOYAKU_REPO}, {"hitsuyou": "true", "repo": YOYAKU_REPO},
+                       {"hitsuyou": True}, {"hitsuyou": 1, "repo": YOYAKU_REPO}):
+            with self.subTest(yoyaku=yoyaku):
+                if yoyaku is None:
+                    self.daicho.pop("yoyaku", None)
+                else:
+                    self.daicho["yoyaku"] = yoyaku
+                self.kaku_all()
+                git(self.root, "commit", "-qam", "形を変えた")
+                with self.assertRaises(kado.Tomeru):
+                    self.toru(self.mon())
+                self.assertEqual(self.nise.kita, [])
+        self.assertIsNone(self.yoyaku_ni_aru())
+
+    def test_一度予約できなかった相手は_この回もう試さない(self):
+        """取り込みに1回失敗したら、あとで台帳が戻っても、この回はその相手へ行かない。"""
+        self.shounin()
+        os.rename(self.bare, self.bare + ".kieta")
+        K = self.mon()
+        with self.assertRaises(kado.Tomeru):
+            self.toru(K)
+        os.rename(self.bare + ".kieta", self.bare)
+        with self.assertRaises(kado.Tomeru):
+            self.toru(K)
+        self.assertEqual(self.nise.kita, [])
+        self.assertIsNone(self.yoyaku_ni_aru())
+
+    def test_予約が要らないと台帳が言っていれば使わない(self):
+        self.daicho["yoyaku"]["hitsuyou"] = False
+        self.kaku_all()
+        git(self.root, "commit", "-qam", "要らない")
+        self.shounin()
+        del self.env["YOYAKU_DIR"]
+        self.assertEqual(self.toru(self.mon()), b"<html>ok</html>")
+        self.assertIsNone(self.yoyaku_ni_aru())
+
+    def kyousou(self, aite_a, aite_b, hi):
+        """2つの実行（別のプロセス）に、一斉に予約させる。返り値は2つの出力。"""
+        go = os.path.join(self.gh, "go-" + hi)
+        procs = []
+        for na, aite in (("a", aite_a), ("b", aite_b)):
+            e = dict(os.environ)
+            e.update(self.run_env(na, job="job-" + na, hajime=hi + "T07:00:00+09:00",
+                                  RUN_DATE=hi, GITHUB_RUN_ID="run-" + na))
+            junbi = os.path.join(self.gh, "junbi-%s-%s" % (hi, na))
+            procs.append((junbi, subprocess.Popen(
+                [sys.executable, "-c", KYOUSOU, HERE, self.root, hi, aite, junbi, go],
+                env=e, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")))
+        while not all(os.path.exists(j) for j, _ in procs):
+            if any(p.poll() is not None for _, p in procs):
+                break
+            time.sleep(0.005)
+        open(go, "w").close()
+        return [p.communicate(timeout=120)[0].strip() for _, p in procs]
+
+    def test_同じ相手を同時に予約したら取得権は1つだけ(self):
+        for i in range(1, 11):
+            hi = "2026-10-%02d" % i
+            with self.subTest(hi=hi):
+                out = self.kyousou("ためし県", "ためし県", hi)
+                self.assertEqual(sum(o.startswith("TOTTA") for o in out), 1, out)
+                # 負けた側は「push できない」ではなく、台帳を読み直して「ほかの実行が持つ」で止まる
+                self.assertTrue(any("ほかの実行" in o for o in out if o.startswith("TORENAI")), out)
+                s = self.yoyaku_ni_aru(hi=hi)
+                self.assertIn(s["job"], ("job-a", "job-b"))
+
+    def test_別の相手なら同時でも両方取れる_積み直す(self):
+        for i in range(1, 6):
+            hi = "2026-11-%02d" % i
+            with self.subTest(hi=hi):
+                out = self.kyousou("ためし県", "ためし市", hi)
+                self.assertEqual(sum(o.startswith("TOTTA") for o in out), 2, out)
+
+    def test_強制pushも削除もしない(self):
+        """予約台帳には書き足すだけ。**門のコードに、強制 push・削除の書き方が無い。**"""
+        src = open(os.path.join(HERE, "common", "kado.py"), encoding="utf-8").read()
+        for w in ("--force", "--delete", "+HEAD", "+refs", "+%s", "--mirror", "-f\"", "push\", \"-f"):
+            self.assertNotIn(w, src, w)
+        pushes = [l for l in src.splitlines() if '"push"' in l and "_git(" in l]
+        self.assertEqual(len(pushes), 1)
+        # 送るのは、照合した自分の commit（mine）を main へ、の1通りだけ（頭に + を付けない）
+        self.assertIn('"%s:refs/heads/main" % mine)', pushes[0])
+
+
+class 知らない使い方で止まる(unittest.TestCase):
+
+    def test_知らない引数なら終了コードが0でない(self):
+        for hikisu in (["--zzz-shiranai-hikisu"], [], ["ichiran"], ["ichiran", "a", "b", "c"]):
+            with self.subTest(hikisu=hikisu):
+                r = subprocess.run([sys.executable, os.path.join(HERE, "common", "kado.py")] + hikisu,
+                                   cwd=HERE, capture_output=True, text=True, timeout=60)
+                self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 class import_しただけで閉じる(unittest.TestCase):

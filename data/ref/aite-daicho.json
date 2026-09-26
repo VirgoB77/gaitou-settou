@@ -1,10 +1,11 @@
 {
- "_setsumei": "相手台帳（運用基準 v1 §9）。相手は運営主体の単位。host はその相手を引く鍵。担当は、その相手へ直接取りに行ってよい置き場を1つだけ書く。複数の置き場のカードに出てくる相手は「未定」（統括・運営者が決めるまで、どこも行かない）。正本は VirgoB77/ogataten-nippo の data/ref/aite-daicho.json。ほかの置き場は、取りに行く前にこれを読み直す。名寄せ（どの host がどの相手か）は step 0 で参謀が仮に付けた。統括が確かめる",
+ "_setsumei": "相手台帳（運用基準 v1 §9）。相手は運営主体の単位。host はその相手を引く鍵。担当は、その相手へ直接取りに行ってよい置き場を1つだけ書く。複数の置き場のカードに出てくる相手は「未定」（統括・運営者が決めるまで、どこも行かない）。正本は VirgoB77/ogataten-nippo の data/ref/aite-daicho.json。ほかの置き場は、取りに行く前にこれを読み直す。名寄せ（どの host がどの相手か）は step 0 で参謀が仮に付けた。統括が確かめる。yoyaku は repo横断の予約台帳（VirgoB77/kujiraya-aite-yoyaku・private）の決まり。hitsuyou が true なら、どの置き場も、相手への最初の外部通信の直前に、その相手の今日（日本時間）の予約を push で取れた実行だけが取りに行く（取れない・読めない・確かめられないときは取りに行かない。予約は解放しない）。yoyaku が無い・形が違うときも、要る側に倒す。id は予約のファイル名に使う ASCII の固定ID。**変えない**（変えた日は、同じ相手を別の相手として数えてしまう）。id は参謀が付けた案。統括が確かめる",
  "aite": {
   "Francfranc": {
    "host": [
     "francfranc.com"
    ],
+   "id": "francfranc",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -14,6 +15,7 @@
    "host": [
     "www.geospatial.jp"
    ],
+   "id": "geospatial-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -23,6 +25,7 @@
    "host": [
     "web.archive.org"
    ],
+   "id": "internet-archive",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -33,6 +36,7 @@
     "delay.trafficinfo.westjr.co.jp",
     "www.westjr.co.jp"
    ],
+   "id": "jr-west",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -43,6 +47,7 @@
     "www.lucua.jp",
     "www.tennojimio.co.jp"
    ],
+   "id": "jr-west-sc",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -52,6 +57,7 @@
    "host": [
     "city.himeji.gkan.jp"
    ],
+   "id": "city-himeji-gkan-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -61,6 +67,7 @@
    "host": [
     "gelatopique.com"
    ],
+   "id": "gelato-pique",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -70,6 +77,7 @@
    "host": [
     "nw.tohoku-epco.co.jp"
    ],
+   "id": "nw-tohoku-epco-co-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -79,6 +87,7 @@
    "host": [
     "opendata.nishi.or.jp"
    ],
+   "id": "opendata-nishi-or-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -88,6 +97,7 @@
    "host": [
     "powergrid.chuden.co.jp"
    ],
+   "id": "powergrid-chuden-co-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -97,6 +107,7 @@
    "host": [
     "quadro-web.com"
    ],
+   "id": "quadro",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -106,6 +117,7 @@
    "host": [
     "services3.arcgis.com"
    ],
+   "id": "services3-arcgis-com",
    "カードがある置き場": [
     "kaihatsu-data"
    ],
@@ -115,6 +127,7 @@
    "host": [
     "www.city.hannan.lg.jp"
    ],
+   "id": "city-hannan-lg-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -124,6 +137,7 @@
    "host": [
     "www.city.hirakata.osaka.jp"
    ],
+   "id": "city-hirakata-osaka-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -133,6 +147,7 @@
    "host": [
     "www.city.ibaraki.osaka.jp"
    ],
+   "id": "city-ibaraki-osaka-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -142,6 +157,7 @@
    "host": [
     "www.city.izumisano.lg.jp"
    ],
+   "id": "city-izumisano-lg-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -151,6 +167,7 @@
    "host": [
     "www.city.kadoma.osaka.jp"
    ],
+   "id": "city-kadoma-osaka-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -160,6 +177,7 @@
    "host": [
     "www.city.kaizuka.lg.jp"
    ],
+   "id": "city-kaizuka-lg-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -169,6 +187,7 @@
    "host": [
     "www.city.kawachinagano.lg.jp"
    ],
+   "id": "city-kawachinagano-lg-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -178,6 +197,7 @@
    "host": [
     "www.city.kishiwada.lg.jp"
    ],
+   "id": "city-kishiwada-lg-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -187,6 +207,7 @@
    "host": [
     "www.city.matsubara.lg.jp"
    ],
+   "id": "city-matsubara-lg-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -196,6 +217,7 @@
    "host": [
     "www.city.minoh.lg.jp"
    ],
+   "id": "city-minoh-lg-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -205,6 +227,7 @@
    "host": [
     "www.city.osaka-izumi.lg.jp"
    ],
+   "id": "city-osaka-izumi-lg-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -214,6 +237,7 @@
    "host": [
     "www.city.osakasayama.osaka.jp"
    ],
+   "id": "city-osakasayama-osaka-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -223,6 +247,7 @@
    "host": [
     "www.city.sennan.lg.jp"
    ],
+   "id": "city-sennan-lg-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -232,6 +257,7 @@
    "host": [
     "www.city.toyonaka.osaka.jp"
    ],
+   "id": "city-toyonaka-osaka-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -241,6 +267,7 @@
    "host": [
     "www.city.yao.osaka.jp"
    ],
+   "id": "city-yao-osaka-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -250,6 +277,7 @@
    "host": [
     "www.energia.co.jp"
    ],
+   "id": "energia-co-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -259,6 +287,7 @@
    "host": [
     "www.hepco.co.jp"
    ],
+   "id": "hepco-co-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -268,6 +297,7 @@
    "host": [
     "www.jcsc.or.jp"
    ],
+   "id": "jcsc-or-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -277,6 +307,7 @@
    "host": [
     "www.kansai-td.co.jp"
    ],
+   "id": "kansai-td-co-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -286,6 +317,7 @@
    "host": [
     "www.okiden.co.jp"
    ],
+   "id": "okiden-co-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -295,6 +327,7 @@
    "host": [
     "www.rikuden.co.jp"
    ],
+   "id": "rikuden-co-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -304,6 +337,7 @@
    "host": [
     "www.sangyo-rodo.metro.tokyo.lg.jp"
    ],
+   "id": "sangyo-rodo-metro-tokyo-lg-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -313,6 +347,7 @@
    "host": [
     "www.tepco.co.jp"
    ],
+   "id": "tepco-co-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -322,6 +357,7 @@
    "host": [
     "www.town.kumatori.lg.jp"
    ],
+   "id": "town-kumatori-lg-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -331,6 +367,7 @@
    "host": [
     "www.yonden.co.jp"
    ],
+   "id": "yonden-co-jp",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -343,6 +380,7 @@
     "shijonawate.aeonmall.jp",
     "umie.jp"
    ],
+   "id": "aeon-mall",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -352,6 +390,7 @@
    "host": [
     "www.grandfront-osaka.jp"
    ],
+   "id": "grandfront-osaka-tmo",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -361,6 +400,7 @@
    "host": [
     "kakogawa.ario.jp"
    ],
+   "id": "seven-and-i",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -370,6 +410,7 @@
    "host": [
     "www.beams.co.jp"
    ],
+   "id": "beams",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -379,6 +420,7 @@
    "host": [
     "www.loft.co.jp"
    ],
+   "id": "loft",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -388,6 +430,7 @@
    "host": [
     "mitsui-shopping-park.com"
    ],
+   "id": "mitsui-fudosan",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -397,6 +440,7 @@
    "host": [
     "www.kyuden.co.jp"
    ],
+   "id": "kyuden-td",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -406,6 +450,7 @@
    "host": [
     "kuzuha-mall.com"
    ],
+   "id": "keihan",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -415,6 +460,7 @@
    "host": [
     "www.keihan.co.jp"
    ],
+   "id": "keihan-railway",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -425,6 +471,7 @@
     "web.pref.hyogo.lg.jp",
     "www.kankyo.pref.hyogo.lg.jp"
    ],
+   "id": "hyogo-pref",
    "カードがある置き場": [
     "gaitou-settou",
     "kaihatsu-data",
@@ -440,6 +487,7 @@
     "www.nankai.co.jp",
     "www.traffic.nankai.co.jp"
    ],
+   "id": "nankai",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -450,6 +498,7 @@
     "nlftp.mlit.go.jp",
     "www.mlit.go.jp"
    ],
+   "id": "mlit",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -460,6 +509,7 @@
     "www.koubai.nta.go.jp",
     "www.nta.go.jp"
    ],
+   "id": "nta",
    "カードがある置き場": [
     "keibai-toukei"
    ],
@@ -469,6 +519,7 @@
    "host": [
     "www.city.sakai.lg.jp"
    ],
+   "id": "sakai-city",
    "カードがある置き場": [
     "kaihatsu-data",
     "ogataten-nippo"
@@ -480,6 +531,7 @@
     "subway.osakametro.co.jp",
     "www.osakametro.co.jp"
    ],
+   "id": "osaka-metro",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -489,6 +541,7 @@
    "host": [
     "www.city.osaka.lg.jp"
    ],
+   "id": "osaka-city",
    "カードがある置き場": [
     "kaihatsu-data",
     "keibai-toukei",
@@ -500,6 +553,7 @@
    "host": [
     "www.pref.osaka.lg.jp"
    ],
+   "id": "osaka-pref",
    "カードがある置き場": [
     "kaihatsu-data",
     "keibai-toukei",
@@ -511,6 +565,7 @@
    "host": [
     "www.city.amagasaki.hyogo.jp"
    ],
+   "id": "amagasaki-city",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -520,6 +575,7 @@
    "host": [
     "www.sanyo-railway.co.jp"
    ],
+   "id": "sanyo-railway",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -529,6 +585,7 @@
    "host": [
     "www.city.akashi.lg.jp"
    ],
+   "id": "akashi-city",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -538,6 +595,7 @@
    "host": [
     "www.bit.courts.go.jp"
    ],
+   "id": "courts-bit",
    "カードがある置き場": [
     "keibai-toukei"
    ],
@@ -547,6 +605,7 @@
    "host": [
     "qs-mall.jp"
    ],
+   "id": "tokyu-land",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -556,6 +615,7 @@
    "host": [
     "www.city.kobe.lg.jp"
    ],
+   "id": "kobe-city",
    "カードがある置き場": [
     "kaihatsu-data",
     "keibai-toukei",
@@ -567,6 +627,7 @@
    "host": [
     "www.shintetsu.co.jp"
    ],
+   "id": "shintetsu",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -576,6 +637,7 @@
    "host": [
     "www.soumu.go.jp"
    ],
+   "id": "soumu",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -585,6 +647,7 @@
    "host": [
     "www.e-stat.go.jp"
    ],
+   "id": "e-stat",
    "カードがある置き場": [
     "gaitou-settou"
    ],
@@ -594,6 +657,7 @@
    "host": [
     "lfb.mof.go.jp"
    ],
+   "id": "mof",
    "カードがある置き場": [
     "kaihatsu-data"
    ],
@@ -603,6 +667,7 @@
    "host": [
     "www.kintetsu.co.jp"
    ],
+   "id": "kintetsu",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -615,6 +680,7 @@
     "www.hankyu-hanshin.co.jp",
     "www.hhp.co.jp"
    ],
+   "id": "hankyu-hanshin",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -624,6 +690,7 @@
    "host": [
     "www.hankyu.co.jp"
    ],
+   "id": "hankyu",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
@@ -633,11 +700,16 @@
    "host": [
     "www.hanshin.co.jp"
    ],
+   "id": "hanshin",
    "カードがある置き場": [
     "ogataten-nippo"
    ],
    "担当": "ogataten-nippo"
   }
  },
- "版": 1
+ "yoyaku": {
+  "hitsuyou": true,
+  "repo": "VirgoB77/kujiraya-aite-yoyaku"
+ },
+ "版": 2
 }
