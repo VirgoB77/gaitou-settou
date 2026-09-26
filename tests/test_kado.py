@@ -1363,6 +1363,38 @@ class 予約台帳(Oki):
         self.assertEqual(self.toru(self.mon()), b"<html>ok</html>")
         self.assertIsNone(self.yoyaku_ni_aru())
 
+    def test_積み直しは上限の回数で止まり_外へ出ない(self):
+        """push が毎回「先頭の食い違い」で断られ続けたら、**上限の回数で止まる**（2026-09-26・⑦C）。
+
+        台帳の bare repo に、どの push も断る pre-receive を置き、来た回数を数える。
+
+          ・上限の値は、いまのコードでは 5（YOYAKU_KAISU）。値そのものも決まりとして見る
+          ・push が来た回数が、ちょうど上限と同じ（上限の次の回へ進まない）
+          ・最後は Tomeru（止まる）。理由は「予約の競合が続いた」。相手への通信は1本も出ない。台帳に予約は入らない
+
+        pre-receive は、上限より3回あとからは通すように変わる。**上限を外すと、そこで通って「取れた」に
+        なり、この検査が鳴る**（止まらずに回り続けて、検査そのものが終わらない、を避ける）。
+        """
+        self.assertEqual(kado.YOYAKU_KAISU, 5)
+        self.shounin()
+        kazu = os.path.join(self.gh, "kita.txt").replace("\\", "/")
+        hook = os.path.join(self.bare, "hooks", "pre-receive")
+        with open(hook, "w", encoding="utf-8", newline="\n") as f:
+            f.write("#!/bin/sh\n"
+                    "echo x >> '%s'\n"
+                    "n=$(wc -l < '%s')\n"
+                    "if [ \"$n\" -le %d ]; then echo 'cannot lock ref: 試験で断る' >&2; exit 1; fi\n"
+                    "exit 0\n" % (kazu, kazu, kado.YOYAKU_KAISU + 3))
+        os.chmod(hook, 0o755)
+        with self.assertRaises(kado.Tomeru) as c:
+            self.toru(self.mon(run_id="kaisu"))
+        with open(kazu, encoding="utf-8") as f:
+            kita = sum(1 for _ in f)
+        self.assertEqual(kita, kado.YOYAKU_KAISU)
+        self.assertIn("予約の競合が %d 回続いた" % kado.YOYAKU_KAISU, str(c.exception))
+        self.assertEqual(self.nise.kita, [])
+        self.assertIsNone(self.yoyaku_ni_aru())
+
     def kyousou(self, aite_a, aite_b, hi):
         """2つの実行（別のプロセス）に、一斉に予約させる。返り値は2つの出力。"""
         go = os.path.join(self.gh, "go-" + hi)
