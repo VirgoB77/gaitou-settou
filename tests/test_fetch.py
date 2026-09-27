@@ -616,7 +616,8 @@ class GateBase(unittest.TestCase):
     def _shounin(self, cid="tameshi"):
         card = self.cards[cid]
         s = {"カード": cid, "運営者承認": "承認", "承認したカード版": card["カード版"],
-             "承認時カード指紋": kado.card_shimon(card), "承認日": "2026-09-24"}
+             "承認時カード指紋": kado.card_shimon(card), "承認日": "2026-09-24",
+             "approved_by": "operator", "entered_by": "operator"}
         self._kaku("data/ref/shounin/%s.json" % cid, s)
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "承認")
