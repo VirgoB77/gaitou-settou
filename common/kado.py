@@ -12,14 +12,22 @@
 ## 正式状態は入力しない。導出する
 
 カードの「統括判定案」と、運営者の承認と、承認したカード版・カード指紋から決める。
-**AI や取得プログラムが承認欄を書いても、承認にならない。**
-承認ファイルを入れた commit に AI の印（Co-Authored-By: Claude 等）があるか、
-自動実行（bot）が入れたものなら、その承認は数えない。
-履歴が浅い（shallow）・保存されていない・書き換え途中なら、確かめられないので数えない。
 
-**限界**：同じ GitHub の鍵で動いているので、印を付けずに commit された承認は
-機械では見分けられない。ここで止められるのは、ふだんの手順で AI・機械が
-書いてしまった承認まで。
+## 承認した者と、承認ファイルに書き込んだ者は別（2026-09-28）
+
+**承認できるのは運営者だけ**（承認ファイルの `approved_by` が `operator`）。AI・Codex などは
+判断者にも承認者にもならない。運営者がはっきり承認した中身を、運営者・Codex・Claude などが
+承認ファイルへ**転記**してよい。転記した者は `entered_by` に書く。
+
+**commit した者から、承認した者を推し量らない。** AI の印のある commit でも AI の承認ではなく、
+印の無い commit でも運営者が承認したことにはならない（前は印を見ていたが、印は Claude のものしか
+見分けられず、Codex の転記を人の入力と数え、改名で印の判定もすり抜けた）。
+
+    門が確かめること    承認ファイルの中身（approved_by が operator・entered_by がある・
+                        カード版・カード指紋・日付）と、そのファイルが保存（commit）されていて、
+                        保存のあとで書き換えられていないこと
+    運用で担保すること  運営者が本当にその中身を承認したこと（承認を受けてから転記する。
+                        どこで承認が出たかは approval_source に書ける）。**門はここを確かめられない**
 
 ## 通信の入口
 
@@ -90,11 +98,8 @@ FUDA_PATH = os.path.join("data", "ref", "kikai-fuda.json")
 DAICHO = os.path.join("data", "ref", "aite-daicho.json")
 KYOU = os.path.join("data", "ref", "aite-kyou.json")
 
-# AI が作った commit の印。**名前ではなく印で見る**
-AI_NO_SHIRUSHI = re.compile(
-    r"co-authored-by:\s*claude|generated with \[claude code\]|noreply@anthropic\.com"
-    r"|claude\.com/claude-code", re.I)
-BOT_NO_SHIRUSHI = re.compile(r"\[bot\]|github-actions", re.I)
+# 承認できる者（approved_by）。**運営者だけ。** AI・Codex・自動実行は承認しない（転記はしてよい）
+SHOUNIN_DEKIRU = ("operator",)
 # 「該当文言なし」だけを理由にした判定。**言及が無いことは許可ではない**
 GAITOU_NASHI = re.compile(
     r"^\s*(該当(する)?(文言|記載|条項)(は|が)?(なし|無し|ない|見当たらない|確認できなかった)"
@@ -169,34 +174,30 @@ def _git(root, *args):
                           text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
-def shounin_dedokoro(root, relpath):
-    """承認ファイルが、運営者の手で入ったものか。**確かめられなければ数えない。**
+def shounin_hozon(root, relpath):
+    """承認ファイルが保存（commit）されていて、保存のあとで書き換えられていないか。(よい, 理由)。
 
-    返り値は (よい, 理由)。
+    **誰が commit したかは見ない**（承認した者は、ファイルの approved_by で読む。上の説明）。
     """
     try:
-        r = _git(root, "rev-parse", "--is-shallow-repository")
+        r = _git(root, "ls-files", "--error-unmatch", relpath)
     except (OSError, subprocess.SubprocessError):
-        return False, "git が使えない。承認の出どころを確かめられない"
+        return False, "git が使えない。承認ファイルが保存されたものか確かめられない"
     if r.returncode != 0:
-        return False, "git の置き場ではない。承認の出どころを確かめられない"
-    if r.stdout.strip() != "false":
-        return False, "履歴が浅い（shallow）。承認の出どころを確かめられない"
-    if _git(root, "ls-files", "--error-unmatch", relpath).returncode != 0:
         return False, "承認ファイルが保存（commit）されていない"
     if _git(root, "diff", "--quiet", "HEAD", "--", relpath).returncode != 0:
         return False, "承認ファイルが、保存したあとで書き換えられている"
-    r = _git(root, "log", "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1f%B%x1e", "--", relpath)
-    kiroku = [x for x in r.stdout.split("\x1e") if x.strip()]
-    if r.returncode != 0 or not kiroku:
-        return False, "承認ファイルの履歴が読めない"
-    for k in kiroku:
-        h, an, ae, cn, ce, body = (k.strip("\n").split("\x1f") + [""] * 6)[:6]
-        if AI_NO_SHIRUSHI.search(body) or AI_NO_SHIRUSHI.search(ae) or AI_NO_SHIRUSHI.search(ce):
-            return False, "承認ファイルに AI の commit（%s）が入っている" % h[:7]
-        if BOT_NO_SHIRUSHI.search(an + ae + cn + ce):
-            return False, "承認ファイルに自動実行の commit（%s）が入っている" % h[:7]
     return True, ""
+
+
+def shounin_sha(s):
+    """承認した者と、転記した者。止める理由（空文字ならよい）。"""
+    if s.get("approved_by") not in SHOUNIN_DEKIRU:
+        return "承認できるのは運営者だけ（approved_by が operator でない：%s）" % (s.get("approved_by") or "空")
+    e = s.get("entered_by")
+    if not isinstance(e, str) or not e.strip():
+        return "承認ファイルに書き込んだ者（entered_by）が書いていない"
+    return ""
 
 
 # ------------------------------------------------------------------ 正式状態
@@ -530,7 +531,10 @@ class Kado:
             return False, "承認時のカード指紋が、いまのカードと違う（承認のあとでカードが変わった）"
         if not _hi(s.get("承認日")):
             return False, "承認日が無い"
-        return shounin_dedokoro(self.root, rel.replace(os.sep, "/"))
+        why = shounin_sha(s)
+        if why:
+            return False, why
+        return shounin_hozon(self.root, rel.replace(os.sep, "/"))
 
     def seishiki(self, cid):
         card = self.card(cid)

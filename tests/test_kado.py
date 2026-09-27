@@ -138,17 +138,19 @@ class Oki(unittest.TestCase):
         self.kaku("data/ref/torimoto-card.json", {"cards": self.cards})
         self.kaku("data/ref/aite-daicho.json", self.daicho)
 
-    def shounin(self, cid="tameshi", ai=False, card=None, **kae):
+    def shounin(self, cid="tameshi", ai=False, card=None, env=None, **kae):
         card = card or self.cards[cid]
         s = {"カード": cid, "運営者承認": "承認", "承認したカード版": card["カード版"],
-             "承認時カード指紋": kado.card_shimon(card), "承認日": "2026-09-24"}
+             "承認時カード指紋": kado.card_shimon(card), "承認日": "2026-09-24",
+             "approved_by": "operator", "entered_by": "operator"}
         s.update(kae)
+        s = {k: v for k, v in s.items() if v is not None}
         self.kaku("data/ref/shounin/%s.json" % cid, s)
         git(self.root, "add", "-A")
         msg = "承認"
         if ai:
             msg += "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-        git(self.root, "commit", "-q", "-m", msg)
+        git(self.root, "commit", "-q", "-m", msg, env=env)
 
     def mon(self, kotae=None, **kw):
         self.nise = Nise(kotae if kotae is not None else {
@@ -237,33 +239,11 @@ class 規約の門(Oki):
             self.toru(k)
         self.assertEqual(self.nise.kita, [])
 
-    def test_AIが書いた承認は数えない(self):
-        self.shounin(ai=True)
-        ok, why = self.mon().shounin("tameshi")
-        self.assertFalse(ok)
-        self.assertIn("AI", why)
-
-    def test_自動実行が書いた承認は数えない(self):
-        self.shounin()
-        with open(self.p("data/ref/shounin/tameshi.json"), "a", encoding="utf-8") as f:
-            f.write("\n")
-        git(self.root, "commit", "-qam", "自動",
-            env={"GIT_AUTHOR_NAME": "github-actions[bot]",
-                 "GIT_AUTHOR_EMAIL": "41898282+github-actions[bot]@users.noreply.github.com"})
-        self.assertFalse(self.mon().shounin("tameshi")[0])
-
     def test_保存していない承認は数えない(self):
         self.shounin()
         s = json.load(open(self.p("data/ref/shounin/tameshi.json"), encoding="utf-8"))
         s["承認日"] = "2026-09-25"
         self.kaku("data/ref/shounin/tameshi.json", s)
-        self.assertFalse(self.mon().shounin("tameshi")[0])
-
-    def test_浅い履歴では承認を数えない(self):
-        self.shounin()
-        with open(self.p(".git", "shallow"), "w") as f:
-            f.write(subprocess.run(["git", "-C", self.root, "rev-parse", "HEAD"],
-                                   capture_output=True, text=True).stdout)
         self.assertFalse(self.mon().shounin("tameshi")[0])
 
     def test_個人情報と個票の取得前ゲートが未決なら取ってよいにならない(self):
@@ -354,6 +334,61 @@ class 規約の門(Oki):
         with self.assertRaises(kado.Tomeru):
             self.toru(self.mon(), url=other)
         self.assertNotIn(other, self.nise.kita)
+
+
+class 承認した者と書き込んだ者(Oki):
+    """承認できるのは運営者だけ。運営者が承認した中身は、だれが転記してもよい（2026-09-28）。
+    **commit した者から、承認した者を推し量らない。**"""
+
+    def kazoeru(self, **kae):
+        self.shounin(**kae)
+        return self.mon().shounin("tameshi")
+
+    def test_1_運営者が承認して運営者が書いた(self):
+        self.assertEqual(self.kazoeru(), (True, ""))
+
+    def test_2_運営者が承認してCodexが転記した(self):
+        self.assertEqual(self.kazoeru(entered_by="codex", env={
+            "GIT_AUTHOR_NAME": "codex", "GIT_AUTHOR_EMAIL": "codex@example.invalid"}), (True, ""))
+
+    def test_3_運営者が承認してClaudeが転記した_AIの印があっても数える(self):
+        self.assertEqual(self.kazoeru(entered_by="claude", ai=True), (True, ""))
+
+    def test_4_AI自身を承認した者として書いた承認は数えない(self):
+        for sha in ("claude", "codex", "ai", "pc-sanbo", "統括", "github-actions"):
+            with self.subTest(approved_by=sha):
+                self.setUp()
+                ok, why = self.kazoeru(approved_by=sha, entered_by=sha)
+                self.assertFalse(ok)
+                self.assertIn("運営者だけ", why)
+
+    def test_承認した者と書き込んだ者のどちらかが無ければ数えない(self):
+        for kae in ({"approved_by": None}, {"entered_by": None}, {"entered_by": " "}):
+            with self.subTest(kae=kae):
+                self.setUp()
+                self.assertFalse(self.kazoeru(**kae)[0])
+
+    def test_印の無いcommitでも_承認した者が運営者でなければ数えない(self):
+        # 前の門は「AI の印が無い commit ＝運営者」と推し量っていた。いまは中身の approved_by で読む
+        self.assertFalse(self.kazoeru(approved_by="codex", entered_by="codex")[0])
+
+    def test_改名しても承認した者の読み方は変わらない(self):
+        # 前の門は、AI の印の commit で入れたファイルを印の無い commit で改名すると通った
+        self.shounin(approved_by="claude", entered_by="claude", ai=True)
+        git(self.root, "mv", "data/ref/shounin/tameshi.json", "data/ref/shounin/tameshi2.json")
+        git(self.root, "commit", "-qm", "改名")
+        git(self.root, "mv", "data/ref/shounin/tameshi2.json", "data/ref/shounin/tameshi.json")
+        git(self.root, "commit", "-qm", "戻した")
+        self.assertFalse(self.mon().shounin("tameshi")[0])
+
+    def test_自動実行が書き換えても_保存された中身で読む(self):
+        self.shounin()
+        with open(self.p("data/ref/shounin/tameshi.json"), "a", encoding="utf-8") as f:
+            f.write("\n")
+        git(self.root, "commit", "-qam", "自動",
+            env={"GIT_AUTHOR_NAME": "github-actions[bot]",
+                 "GIT_AUTHOR_EMAIL": "41898282+github-actions[bot]@users.noreply.github.com"})
+        self.assertEqual(self.mon().shounin("tameshi"), (True, ""))
 
 
 class 機械札(Oki):
