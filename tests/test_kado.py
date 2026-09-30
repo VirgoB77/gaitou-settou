@@ -1918,12 +1918,22 @@ class 取得前の確かめの強め(Oki):
     def test_金庫がコードの置き場の中や_それを含む場所なら止める(self):
         naka = os.path.join(self.root, "_raw")
         os.makedirs(os.path.join(naka, "shita"))
-        for d in (naka, os.path.join(naka, "shita"), self.root, os.path.dirname(self.root)):
+        for d, kotoba in ((naka, "同じ git の作業木"), (os.path.join(naka, "shita"), "同じ git の作業木"),
+                          (self.root, "そのもの"), (os.path.dirname(self.root), "そのもの")):
             with self.subTest(d=d):
                 self.env = dict(self.env, KINKO_DIR=d)
                 k = self.mon()
                 riyuu = k.kinko_preflight(os.path.join(d, "raw"))
-                self.assertTrue(any("コードの置き場" in r for r in riyuu), riyuu)
+                self.assertTrue(any(kotoba in r for r in riyuu), riyuu)
+
+    def test_コードの置き場がgitでなくても_その中のフォルダは金庫にしない(self):
+        nashi = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, nashi, True)
+        naka = os.path.join(nashi, "_raw")
+        os.makedirs(naka)
+        k = kado.Kado(nashi, REPO, UA, env=dict(self.env, KINKO_DIR=naka), transport=Nise({}))
+        riyuu = k.kinko_preflight(os.path.join(naka, "raw"))
+        self.assertTrue(any("別の git の置き場でないフォルダ" in r for r in riyuu), riyuu)
 
     def test_コードの置き場の下の_rawに別の置き場をcloneした形は通す(self):
         """いまの本番の置き方（大型店日報・競売・マップ：$GITHUB_WORKSPACE/_raw に private の金庫を clone）。"""
@@ -1973,7 +1983,11 @@ class 取得前の確かめの強め(Oki):
         try:
             os.symlink(naka, soto, target_is_directory=True)
         except (OSError, NotImplementedError):
-            self.skipTest("この環境では symlink を作れない")
+            try:
+                import _winapi                                  # Windows：symlink の権限が無くても junction は作れる
+                _winapi.CreateJunction(naka, soto)
+            except (ImportError, OSError):
+                self.skipTest("この環境では symlink も junction も作れない")
         self.env = dict(self.env, KINKO_DIR=soto)
         riyuu = self.mon().kinko_preflight(os.path.join(soto, "raw"))
         self.assertTrue(any("コードの置き場" in r for r in riyuu), riyuu)
@@ -2007,6 +2021,19 @@ class 取得前の確かめの強め(Oki):
                     {"STOP条件の確認": {"robots": "当たる：Disallow"}}, {"route種別": "manual"}):
             with self.subTest(kae=str(kae)[:40]):
                 self.assertEqual(kado.canary_jotai(canary_card(**kae), True) == "Canaryしてよい", False)
+
+    def test_Canary取得と本番の行為の両方があっても_本番の取得は本番の状態で見る(self):
+        self.cards["tameshi-c"] = canary_card(承認対象の行為=["Canary取得", "自動取得", "内部保存"])
+        self.kaku_all()
+        self.shounin("tameshi-c")
+        k = self.mon()
+        self.assertEqual((k.seishiki("tameshi-c"), k.canary_jotai("tameshi-c")), ("規約未確定", "Canaryしてよい"))
+        k.install()
+        with self.assertRaises(kado.Tomeru) as cm:                                     # 本番の行為（自動取得・内部保存）
+            with k.sesshon("tameshi-c", hozon_saki=os.path.join(self.kinko, "raw")):
+                pass
+        self.assertIn("規約未確定", " ".join(cm.exception.riyuu))
+        self.assertEqual(self.nise.kita, [])
 
     def test_Canaryのカードは本番の取得に使えず_Canaryの取得にだけ使える(self):
         self.cards["tameshi-c"] = canary_card()
