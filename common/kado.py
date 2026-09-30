@@ -85,7 +85,8 @@ ROUTE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,80}\Z")
 #   外す      事実・数値・データそのものの DB 化・蓄積・収集・商用利用の禁止が明示されている
 #   読めない  規約が事実データを対象にしているか、DB 化・商用利用に当たるかが読めない
 #             （取得可否確認・構造確認・規約確認までにとどめる）
-SHOUHIN_KAHI = ("可", "外す", "読めない")
+#   未確認    まだ確かめていない（A-3。空欄と混ぜないために書く）
+SHOUHIN_KAHI = ("可", "外す", "読めない", "未確認")
 # そのrouteで取ったものを商品に使えるか（API・会員の契約が第三者提供などを禁じていれば「使えない」）
 ROUTE_SHOUHIN = ("使える", "使えない", "未確認")
 # 取得を止める不確定事項が無いこと（商品化の側の未確認は「商品化の未確認事項」の欄で持つ）
@@ -134,6 +135,9 @@ KYOU = os.path.join("data", "ref", "aite-kyou.json")
 # 承認できる者（approved_by）。**運営者だけ。** AI・Codex・自動実行は承認しない（転記はしてよい）
 SHOUNIN_DEKIRU = ("operator",)
 # 「該当文言なし」だけを理由にした判定。**言及が無いことは許可ではない**
+# 確かめていないことを書いた値（カードの STOP条件の確認・商品用の欄などに、空欄と混ぜないために書く）。
+# **確かめた中身としては数えない**（根拠5 の STOP 条件の確認で、この形の値は「欠け」と同じに扱う）
+MIKAKUNIN = re.compile(r"^\s*(未確認|未決|分からない|判断要)")
 GAITOU_NASHI = re.compile(
     r"^\s*(該当(する)?(文言|記載|条項)(は|が)?(なし|無し|ない|見当たらない|確認できなかった)"
     r"|禁止(は|が)?(書いて|書かれて)(い)?ない|記載(は)?(なし|無し|ない)|特になし)\s*[。．.]?\s*$")
@@ -350,14 +354,14 @@ def _kaketeiru(card):
             nai.append("肯定根拠番号（5 は通常の公開経路 web の route だけ）")
         for k in STOP_JOKEN:
             v = joken.get(k)
-            if not isinstance(v, str) or not v.strip() or GAITOU_NASHI.match(v):
+            if not isinstance(v, str) or not v.strip() or GAITOU_NASHI.match(v) or MIKAKUNIN.match(v):
                 nai.append("STOP条件の確認：%s（確かめた中身を書く）" % k)
     # 商品用の継続観測にしてよいか（正本 3.4a）。「可」でなければ本番の継続観測をしない
     kahi = card.get("商品用継続観測の可否")
     if kahi == "外す":
         nai.append("商品用の継続観測から外した取得元（事実データそのものの DB 化・商用利用の禁止が明示）")
     elif kahi != "可":
-        nai.append("商品用継続観測の可否が読めない（取得可否確認・構造確認までにとどめる）")
+        nai.append("商品用継続観測の可否が「可」でない（読めない・未確認。取得可否確認・構造確認までにとどめる）")
     riyuu = card.get("判定理由") or ""
     if not riyuu.strip() or GAITOU_NASHI.match(riyuu):
         nai.append("判定理由（「該当文言なし」だけでは足りない）")
