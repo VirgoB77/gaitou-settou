@@ -1586,6 +1586,43 @@ class 公開情報の取得と事実データの利用(Oki):
             self.toru(k)
         self.assertNotIn(URL, self.nise.kita)
 
+    def test_STOP条件の確認が未確認や判断要なら根拠5にならない(self):
+        """A-3：カードには「未確認」を空欄と分けて書く。**確かめた中身としては数えない。**"""
+        for v in ("未確認", "未確認：まだ確かめていない", "判断要：アクセス制御に当たるか（残作業59）",
+                  "分からない", "未決", " 未確認"):
+            with self.subTest(v=v):
+                c = konkyo5_card()
+                c["STOP条件の確認"] = dict(c["STOP条件の確認"], アクセス制御=v)
+                self.assertEqual(kado.seishiki_jotai(c, True), "規約未確定")
+
+    def test_商品用継続観測の可否が未確認なら本番に進まない(self):
+        self.assertIn("未確認", kado.SHOUHIN_KAHI)
+        for c in (konkyo5_card(商品用継続観測の可否="未確認"), yoi_card(商品用継続観測の可否="未確認")):
+            with self.subTest(c=c["肯定根拠番号"]):
+                self.assertEqual(kado.seishiki_jotai(c, True), "規約未確定")
+
+    def test_置き場のカードの3_4aの欄は決まった形(self):
+        """置き場の data/ref/torimoto-card.json の 3.4a の欄を、決まった値だけで書いているか（A-3）。
+        **未確認は空欄ではなく「未確認」で書く**（空欄と0を混ぜない）。値の中身が正しいかは見ない。"""
+        pth = os.path.join(HERE, "data", "ref", "torimoto-card.json")
+        cards = json.load(open(pth, encoding="utf-8"))["cards"]
+        self.assertGreater(len(cards), 0)
+        for cid, c in cards.items():
+            with self.subTest(cid=cid):
+                self.assertIn(c.get("route種別"), kado.ROUTE + ("",))
+                self.assertTrue(c.get("source_id") == "" or kado.ROUTE_ID.match(c["source_id"]))
+                j = c.get("STOP条件の確認")
+                self.assertIsInstance(j, dict)
+                self.assertEqual(sorted(j), sorted(kado.STOP_JOKEN))
+                for v in j.values():
+                    self.assertTrue(isinstance(v, str) and v.strip(), "STOP条件の確認は空欄にしない（未確認と書く）")
+                    self.assertTrue(kado.STOP_ATARU.match(v) or kado.MIKAKUNIN.match(v) or v.startswith("当たらない"))
+                self.assertIn(c.get("商品用継続観測の可否"), kado.SHOUHIN_KAHI)
+                self.assertIn(c.get("このrouteのデータを商品に使えるか"), kado.ROUTE_SHOUHIN)
+                self.assertTrue((c.get("不確定事項") or "").strip(), "不確定事項は空欄にしない")
+                if c.get("このrouteのデータを商品に使えるか") != "使える":
+                    self.assertTrue((c.get("商品化の未確認事項") or "").strip(), "商品に使えるかが未確認なら、商品化の未確認事項に書く")
+
     def test_根拠5は通常の公開経路webのrouteだけ(self):
         for r in ("api", "member"):
             with self.subTest(r=r):
