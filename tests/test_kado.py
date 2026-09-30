@@ -1872,6 +1872,160 @@ class HTTPメソッドとpublic_form_post(Oki):
         self.assertEqual(self.nise.kita, [])
 
 
+
+def canary_card(**kae):
+    """Canary（1回だけ・private の quarantine まで）の限定の承認に要る欄がそろったカード。本番の「取ってよい」にはならない。"""
+    c = yoi_card(**{"承認対象の行為": ["Canary取得"], "商品用継続観測の可否": "未確認",
+                    "個票の粒度": "未確認（列は取ってから見る）", "所在地の扱い": "未決（列を見てから）",
+                    "公開時の粒度": "未決（public projection は列の分類のあと）", "publicに出す予定": "なし（Canary）",
+                    "不確定事項": "取るまで未確認（転送・列・拒否状態）"})
+    c.update(kae)
+    return c
+
+
+class 取得前の確かめの強め(Oki):
+    """P1 robots.txt の途中切れ／P5 金庫の置き場（KINKO_PRIVATE の申告だけに頼らない）／
+    P6 個人情報の欄の未決（語句が後ろに続いても）と、Canary の限定の状態（本番の「取ってよい」と分ける）。"""
+
+    # ---- P1
+    def test_robotsが途中で切れたら確かめられなかったとして止める(self):
+        self.shounin()
+        body = b"User-agent: *\nDisallow: /himitsu/\n"
+        for cl in (str(len(body) + 50), "abc"):
+            with self.subTest(cl=cl):
+                kyou = self.p("data", "ref", "aite-kyou.json")
+                if os.path.exists(kyou):
+                    os.remove(kyou)
+                k = self.mon({"https://%s/robots.txt" % HOST: (200, {"Content-Type": "text/plain", "Content-Length": cl}, body),
+                              URL: HONBUN}, run_id="run-" + cl)
+                with self.assertRaises(kado.Tomeru) as cm:
+                    self.toru(k)
+                self.assertIn("確かめられなかった", str(cm.exception))
+                self.assertNotIn(URL, self.nise.kita)
+        k = self.mon({"https://%s/robots.txt" % HOST: (200, {"Content-Type": "text/plain", "Content-Length": str(len(body))}, body),
+                      URL: HONBUN}, run_id="run-ok")
+        if os.path.exists(self.p("data", "ref", "aite-kyou.json")):
+            os.remove(self.p("data", "ref", "aite-kyou.json"))
+        self.assertEqual(self.toru(k), b"<html>ok</html>")                           # 大きさが合えば通る
+
+    def test_kiretaは大きさの食い違いを返す(self):
+        self.assertEqual(kado.kireta({"Content-Length": "10"}, 10), "")
+        self.assertEqual(kado.kireta({}, 3), "")
+        self.assertIn("途中で切れた", kado.kireta({"Content-Length": "10"}, 9))
+        self.assertIn("読めない", kado.kireta({"Content-Length": "1e3"}, 9))
+
+    # ---- P5
+    def test_金庫がコードの置き場の中や_それを含む場所なら止める(self):
+        naka = os.path.join(self.root, "_raw")
+        os.makedirs(os.path.join(naka, "shita"))
+        for d in (naka, os.path.join(naka, "shita"), self.root, os.path.dirname(self.root)):
+            with self.subTest(d=d):
+                self.env = dict(self.env, KINKO_DIR=d)
+                k = self.mon()
+                riyuu = k.kinko_preflight(os.path.join(d, "raw"))
+                self.assertTrue(any("コードの置き場" in r for r in riyuu), riyuu)
+
+    def test_コードの置き場の下の_rawに別の置き場をcloneした形は通す(self):
+        """いまの本番の置き方（大型店日報・競売・マップ：$GITHUB_WORKSPACE/_raw に private の金庫を clone）。"""
+        git(self.root, "remote", "add", "origin", "https://github.com/VirgoB77/tameshi.git")
+        raw = os.path.join(self.root, "_raw")
+        os.makedirs(raw)
+        git(raw, "init", "-q")
+        for origin, yoi in (("https://github.com/VirgoB77/tameshi-raw.git", True),
+                            ("https://github.com/VirgoB77/tameshi", False)):
+            with self.subTest(origin=origin):
+                subprocess.run(["git", "-C", raw, "remote", "remove", "origin"], capture_output=True)
+                git(raw, "remote", "add", "origin", origin)
+                self.env = dict(self.env, KINKO_DIR=raw)
+                riyuu = self.mon().kinko_preflight(os.path.join(raw, "raw"))
+                self.assertEqual(riyuu == [], yoi, riyuu)
+
+    def test_コードの置き場のworktreeは金庫にしない(self):
+        soto = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, soto, True)
+        wt = os.path.join(soto, "wt")
+        git(self.root, "worktree", "add", "-q", "-b", "kinko-no-tsumori", wt)
+        self.addCleanup(subprocess.run, ["git", "-C", self.root, "worktree", "remove", "--force", wt], capture_output=True)
+        self.env = dict(self.env, KINKO_DIR=wt)
+        riyuu = self.mon().kinko_preflight(os.path.join(wt, "raw"))
+        self.assertTrue(any("worktree" in r for r in riyuu), riyuu)
+
+    def test_金庫が別のgitの置き場なら_取り込み先がコードと違うときだけよい(self):
+        git(self.root, "remote", "add", "origin", "https://github.com/VirgoB77/tameshi.git")
+        betsu = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, betsu, True)
+        git(betsu, "init", "-q")
+        for origin, jikkou, yoi in (("git@github.com:VirgoB77/tameshi-raw.git", "", True),
+                                    ("git@github.com:VirgoB77/tameshi.git", "", False),        # コードと同じ置き場
+                                    ("https://github.com/VirgoB77/tameshi-raw", "VirgoB77/tameshi-raw", False)):  # この実行の置き場
+            with self.subTest(origin=origin, jikkou=jikkou):
+                subprocess.run(["git", "-C", betsu, "remote", "remove", "origin"], capture_output=True)
+                git(betsu, "remote", "add", "origin", origin)
+                self.env = dict(self.env, KINKO_DIR=betsu, GITHUB_REPOSITORY=jikkou)
+                riyuu = self.mon().kinko_preflight(os.path.join(betsu, "raw"))
+                self.assertEqual(riyuu == [], yoi, riyuu)
+
+    def test_金庫をsymlinkでコードの置き場の中へ向けても止める(self):
+        naka = os.path.join(self.root, "_raw")
+        os.makedirs(naka)
+        soto = os.path.join(tempfile.mkdtemp(), "kinko")
+        self.addCleanup(shutil.rmtree, os.path.dirname(soto), True)
+        try:
+            os.symlink(naka, soto, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("この環境では symlink を作れない")
+        self.env = dict(self.env, KINKO_DIR=soto)
+        riyuu = self.mon().kinko_preflight(os.path.join(soto, "raw"))
+        self.assertTrue(any("コードの置き場" in r for r in riyuu), riyuu)
+
+    def test_金庫の置き場が違えば外へ出す前に止まる(self):
+        self.shounin()
+        self.env = dict(self.env, KINKO_DIR=self.root)
+        k = self.mon()
+        with self.assertRaises(kado.Tomeru):
+            self.toru(k)
+        self.assertEqual(self.nise.kita, [])
+
+    # ---- P6
+    def test_個人情報の欄は語句が後ろに続いても未決(self):
+        for k in kado.KOJIN_GATE_KISAI:
+            for v in ("未確認（列を見ていない）", "未決（あとで決める）", "判断要：個人事業主の所在地", "分からない（まだ）", " 未確認"):
+                with self.subTest(k=k, v=v):
+                    self.assertEqual(kado.seishiki_jotai(yoi_card(**{k: v}), True), "規約未確定")
+        self.assertEqual(kado.seishiki_jotai(yoi_card(), True), "取ってよい")
+
+    def test_Canaryの限定の状態は本番の取ってよいと分ける(self):
+        c = canary_card()
+        self.assertEqual(kado.seishiki_jotai(c, True), "規約未確定")                    # 本番にはならない
+        self.assertEqual(kado.canary_jotai(c, True), "Canaryしてよい")
+        self.assertEqual(kado.canary_jotai(c, False), "規約未確定")                     # 運営者承認が要る
+        self.assertNotEqual(kado.canary_jotai(yoi_card(), True), "Canaryしてよい")      # 行為に Canary取得 が無い
+        for kae in ({"publicに出す予定": "件数だけ"}, {"承認対象の行為": ["自動取得", "内部保存"]},
+                    {"商品用継続観測の可否": "外す"}, {"privateに保存する予定": "未決"}, {"氏名を含みうる": ""},
+                    {"STOP条件の確認": {"robots": "当たる：Disallow"}}, {"route種別": "manual"}):
+            with self.subTest(kae=str(kae)[:40]):
+                self.assertEqual(kado.canary_jotai(canary_card(**kae), True) == "Canaryしてよい", False)
+
+    def test_Canaryのカードは本番の取得に使えず_Canaryの取得にだけ使える(self):
+        self.cards["tameshi-c"] = canary_card()
+        self.kaku_all()
+        self.shounin("tameshi-c")
+        k = self.mon()
+        self.assertEqual((k.seishiki("tameshi-c"), k.canary_jotai("tameshi-c")), ("規約未確定", "Canaryしてよい"))
+        k.install()
+        with self.assertRaises(kado.Tomeru):                                           # 本番の行為（自動取得・内部保存）
+            with k.sesshon("tameshi-c", hozon_saki=os.path.join(self.kinko, "raw")):
+                pass
+        self.assertEqual(self.nise.kita, [])
+        with k.sesshon("tameshi-c", koui=(kado.KOUI_CANARY,), hozon_saki=os.path.join(self.kinko, "raw")):
+            with urllib.request.urlopen(URL, timeout=5) as r:
+                self.assertEqual(r.read(), b"<html>ok</html>")
+        row = {"price": 1, "demoto": k.demoto("tameshi-c", "2026-09-25T07:00:00+09:00", URL)}
+        saki = os.path.join(self.kinko, "kansoku")
+        with self.assertRaises(kado.Tomeru):
+            k.kansoku_hozon("tameshi-c", [row], saki)                                   # 本番の保存にはならない
+        self.assertTrue(k.kansoku_hozon("tameshi-c", [row], saki, canary=True))
+
 T_MIRU = "2026-09-25T07:00:00+09:00"
 
 

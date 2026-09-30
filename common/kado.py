@@ -118,6 +118,10 @@ ROBOTS = ("通す", "拒否", "混んでいる", "確かめられなかった")
 # 1回の取得で、承認に含まれていなければならない行為。**取ったものは必ず金庫に残す**ので、
 # 取るだけで内部保存もしている
 KOUI_TORU = ("自動取得", "内部保存")
+# Canary（1回だけ・private の quarantine まで・中身の形を確かめる）の限定の行為。本番の取得（KOUI_TORU）とは別
+KOUI_CANARY = "Canary取得"
+# Canary では、中身を見てから決める欄（ほかの個人情報の欄は、Canary でも決めてあること）
+CANARY_MIKETSU_YOI = ("個票の粒度", "所在地の扱い", "公開時の粒度")
 MATSU = 5                      # 同じ相手に続けて出すときに空ける秒数（固定線）
 TIMEOUT = 40
 ROBOTS_OOKISA = 512000         # これより大きい robots.txt は読みきれないので「確かめられなかった」
@@ -310,6 +314,31 @@ def form_nakami(f):
     return urllib.parse.urlencode(list(f["送る値"].items()), encoding="utf-8").encode("ascii")
 
 
+def kireta(headers, n):
+    """応答が途中で切れていないか。Content-Length があって、読めた大きさ n と合わなければ理由（切れていなければ空文字）。
+    Content-Length が読めない形も、確かめられないとして理由を返す。Content-Length が無いとき（chunked など）は見ない。"""
+    c = headers.get("Content-Length") if headers is not None else None
+    if c is None:
+        return ""
+    c = str(c).strip()
+    if not c.isdigit():
+        return "Content-Length が読めない（%s）" % c[:40]
+    if int(c) != n:
+        return "途中で切れた（Content-Length %s・読めた %d バイト）" % (c, n)
+    return ""
+
+
+def _repo_na(url):
+    """git の取り込み先の URL から「持ち主/置き場」（小文字）。読めなければ空文字。"""
+    u = str(url or "").strip().replace("\\", "/")
+    if u.endswith(".git"):
+        u = u[:-4]
+    for mae in ("git@github.com:", "ssh://git@github.com/", "https://github.com/", "http://github.com/"):
+        if u.lower().startswith(mae):
+            return u[len(mae):].strip("/").lower()
+    return u.rstrip("/").lower()
+
+
 # ------------------------------------------------------------------ 正式状態
 def _manual_kaketeiru(card):
     """manual の route の「取ってよい」（人が見て記録してよい）に要る欄のうち、空いているもの（正本 3.4a）。
@@ -344,7 +373,7 @@ def _manual_kaketeiru(card):
             nai.append("%s（はい／いいえ／分からない）" % k)
     for k in KOJIN_GATE_KISAI:
         v = str(card.get(k) or "").strip()
-        if not v or v in MIKETSU:
+        if not v or MIKAKUNIN.match(v):
             nai.append("%s（未決）" % k)
     if card.get("商品用継続観測の可否") != "可":
         nai.append("商品用継続観測の可否が「可」でない")
@@ -353,10 +382,16 @@ def _manual_kaketeiru(card):
     return nai
 
 
-def _kaketeiru(card):
-    """「取ってよい」に要る欄のうち、空いているもの。"""
+def _kaketeiru(card, canary=False):
+    """「取ってよい」に要る欄のうち、空いているもの。
+
+    canary=True は Canary（1回だけ・private の quarantine まで・中身の形を確かめる）の限定の確かめ。
+    本番と違うのは、商品用継続観測の可否が「可」でなくてよい（「外す」は止める）・取得を止める不確定事項の欄を見ない・
+    個票の粒度／所在地の扱い／公開時の粒度 は中身を見てから決めてよい、の3つだけ。そのかわり、承認対象の行為に
+    「Canary取得」があり、publicに出す予定が「なし」であること。
+    """
     if card.get("route種別") == "manual":
-        return _manual_kaketeiru(card)
+        return ["manual は Canary にしない"] if canary else _manual_kaketeiru(card)
     nai = []
     shoseki = card.get("規約証跡") or {}
     hoho = card.get("承認する取得方法") or {}
@@ -398,7 +433,7 @@ def _kaketeiru(card):
     kahi = card.get("商品用継続観測の可否")
     if kahi == "外す":
         nai.append("商品用の継続観測から外した取得元（事実データそのものの DB 化・商用利用の禁止が明示）")
-    elif kahi != "可":
+    elif kahi != "可" and not canary:
         nai.append("商品用継続観測の可否が「可」でない（読めない・未確認。取得可否確認・構造確認までにとどめる）")
     riyuu = card.get("判定理由") or ""
     if not riyuu.strip() or GAITOU_NASHI.match(riyuu):
@@ -423,15 +458,21 @@ def _kaketeiru(card):
             nai.append("%s（はい／いいえ／分からない）" % k)
     for k in KOJIN_GATE_KISAI:
         v = str(card.get(k) or "").strip()
-        if not v or v in MIKETSU:
+        if (not v or MIKAKUNIN.match(v)) and not (canary and k in CANARY_MIKETSU_YOI):
             nai.append("%s（未決）" % k)
+    if canary:
+        if KOUI_CANARY not in (card.get("承認対象の行為") or []):
+            nai.append("承認対象の行為（%s）" % KOUI_CANARY)
+        if not str(card.get("publicに出す予定") or "").startswith("なし"):
+            nai.append("publicに出す予定（Canary は「なし」）")
+        return nai
     # **取得を止める**不確定事項が無いこと。商品化の側の未確認は「商品化の未確認事項」で持ち、ここでは見ない
     if card.get("不確定事項") not in FUKAKUTEI_NASHI:
         nai.append("取得を止める不確定事項が残っている（不確定事項が「なし」でない）")
     return nai
 
 
-def seishiki_jotai(card, shounin_yoi):
+def seishiki_jotai(card, shounin_yoi, canary=False):
     """正式状態（4語）。**入力欄ではなく、ここで導出する。**
 
     shounin_yoi は、現在のカード版・カード指紋に対応した運営者承認があり、
@@ -451,9 +492,15 @@ def seishiki_jotai(card, shounin_yoi):
         return "規約未確定"
     if card.get("専門家確認") == SENMONKA_TOMERU:
         return "規約未確定"
-    if _kaketeiru(card):
+    if _kaketeiru(card, canary):
         return "規約未確定"
     return "取ってよい"
+
+
+def canary_jotai(card, shounin_yoi):
+    """Canary の状態。「Canaryしてよい」か、本番と同じ4語のどれか（取ってよいにはならない）。"""
+    j = seishiki_jotai(card, shounin_yoi, canary=True)
+    return "Canaryしてよい" if j == "取ってよい" else j
 
 
 # ------------------------------------------------------------------ 出どころ（route provenance）
@@ -895,7 +942,7 @@ class Kado:
             except OSError:
                 pass
 
-    def kansoku_hozon(self, cid, rows, hozon_saki):
+    def kansoku_hozon(self, cid, rows, hozon_saki, canary=False):
         """**本番の観測を保存する境界**（正本 3.4a）。出どころ（source_id・route_id・route_kind・observed_at、
         manual は記録者の役割と見た URL）が欠けた観測は保存しない。書いた場所を返す。"""
         riyuu = []
@@ -904,8 +951,8 @@ class Kado:
         card = self.card(cid)
         if isinstance(card, dict) and card.get("route種別") == "manual":
             riyuu.append("manual の観測は Kado.manual_kiroku で保存する")
-        elif self.seishiki(cid) != "取ってよい":
-            riyuu.append("正式状態が「%s」" % self.seishiki(cid))
+        elif self.seishiki(cid, canary=canary) != "取ってよい":
+            riyuu.append("正式状態が「%s」%s" % (self.seishiki(cid, canary=canary), "（Canary）" if canary else ""))
         if riyuu:
             self.kiroku.append((cid, "", "保存しなかった", "／".join(riyuu)))
             raise Tomeru(riyuu)
@@ -1009,12 +1056,16 @@ class Kado:
                 return None, "manual の履歴に形の違う行がある（%s）" % MANUAL_RIREKI
         return list(d["kiroku"]), ""
 
-    def seishiki(self, cid):
+    def seishiki(self, cid, canary=False):
         card = self.card(cid)
         ok = False
         if card is not None and card.get("統括判定案") == "取ってよい":
             ok, _ = self.shounin(cid)
-        return seishiki_jotai(card, ok)
+        return seishiki_jotai(card, ok, canary)
+
+    def canary_jotai(self, cid):
+        j = self.seishiki(cid, canary=True)
+        return "Canaryしてよい" if j == "取ってよい" else j
 
     # ---------------------------------------------------------- 機械札・控え
     def fuda(self, cid):
@@ -1082,9 +1133,12 @@ class Kado:
             return ["金庫の置き場が渡されていない（KINKO_DIR）"]
         if self.env.get("KINKO_PRIVATE") != "1":
             riyuu.append("金庫が private だと確かめられていない（KINKO_PRIVATE）")
+        kinko = os.path.realpath(d)
+        why = self._kinko_basho(kinko)
+        if why:
+            return riyuu + [why]
         if not hozon_saki:
             return riyuu + ["保存先が渡されていない"]
-        kinko = os.path.realpath(d)
         saki = os.path.realpath(hozon_saki)
         if saki != kinko and not saki.startswith(kinko + os.sep):
             return riyuu + ["保存先が金庫の中に無い（%s）" % hozon_saki]
@@ -1096,6 +1150,44 @@ class Kado:
         except OSError as e:
             riyuu.append("金庫に書けない（%s）" % type(e).__name__)
         return riyuu
+
+    def _kinko_basho(self, kinko):
+        """金庫の置き場が、このコードの置き場（public になりうる作業木）でないか。よいなら空文字（正本 3.4a）。
+
+        **KINKO_PRIVATE=1 の申告だけでは金庫と認めない。** symlink は解いてから見る。
+          このコードの置き場（root）そのもの・root を含む場所 → だめ
+          root の中で、別の git の置き場になっていないフォルダ（root の作業木の一部）→ だめ
+          root と同じ git の作業木・同じ置き場の worktree（git の共通の置き場が同じ）→ だめ
+          別の git の置き場（金庫の置き場の clone。root の下の _raw でもよい）→ 取り込み先（origin）が
+            root と同じ・この実行の置き場（GITHUB_REPOSITORY）と同じ なら だめ
+          git の外で、root の外（手元の一時フォルダなど）→ よい
+        private かどうか（置き場の公開の設定）は、ここでは見られない。手順書が取り込む前に確かめる。
+        """
+        root = os.path.realpath(self.root)
+        if kinko == root or root.startswith(kinko.rstrip(os.sep) + os.sep):
+            return "金庫が、このコードの置き場そのもの・コードの置き場を含む場所（KINKO_DIR）"
+        naka = kinko.startswith(root + os.sep)
+        r = _git(kinko, "rev-parse", "--show-toplevel")
+        if r.returncode != 0 or not r.stdout.strip():
+            return "金庫が、このコードの置き場の中の、別の git の置き場でないフォルダ（KINKO_DIR）" if naka else ""
+        top = os.path.realpath(r.stdout.strip())
+        rt = _git(root, "rev-parse", "--show-toplevel")
+        rtop = os.path.realpath(rt.stdout.strip()) if rt.returncode == 0 and rt.stdout.strip() else root
+        if top == rtop or (naka and not top.startswith(root + os.sep)):
+            return "金庫が、このコードの置き場と同じ git の作業木の中にある（KINKO_DIR）"
+
+        def kyoutsuu(d):
+            c = _git(d, "rev-parse", "--git-common-dir")
+            return os.path.realpath(os.path.join(d, c.stdout.strip())) if c.returncode == 0 and c.stdout.strip() else ""
+        kc = kyoutsuu(top)
+        if kc and kc == kyoutsuu(rtop):
+            return "金庫が、このコードの置き場の worktree（git の共通の置き場が同じ）（KINKO_DIR）"
+        o1 = _repo_na(_git(top, "config", "--get", "remote.origin.url").stdout)
+        o2 = _repo_na(_git(rtop, "config", "--get", "remote.origin.url").stdout)
+        jikkou = str(self.env.get("GITHUB_REPOSITORY") or "").lower()
+        if o1 and (o1 == o2 or o1 == jikkou):
+            return "金庫の git の取り込み先が、このコードの置き場と同じ（%s）" % o1
+        return ""
 
     # ---------------------------------------------------------- カードの門
     def card_mon(self, cid, koui=KOUI_TORU, hozon_saki=None):
@@ -1110,13 +1202,14 @@ class Kado:
         riyuu = []
         if self.today is None:
             return ["今日の日付が渡されていない（RUN_DATE・hajimeru の today）。日付が要る関所を確かめられない"]
-        jotai = self.seishiki(cid)
+        canary = list([koui] if isinstance(koui, str) else koui) == [KOUI_CANARY]
+        jotai = self.seishiki(cid, canary=canary)
         if jotai != "取ってよい":
             why = ""
             if card.get("統括判定案") == "取ってよい":
                 ok, why = self.shounin(cid)
                 if ok:
-                    why = "、".join(_kaketeiru(card)) or (
+                    why = "、".join(_kaketeiru(card, canary)) or (
                         "専門家確認が未了" if card.get("専門家確認") == SENMONKA_TOMERU else "")
             riyuu.append("正式状態が「%s」%s" % (jotai, ("（%s）" % why) if why else ""))
         kigen = _hi(card.get("再確認期限"))
@@ -1443,13 +1536,14 @@ class Kado:
             handlers.insert(0, self.transport)
         op = urllib.request.build_opener(*handlers)
         req = urllib.request.Request(url, headers={"User-Agent": self.ua})
-        status, ctype, cenc, body, saki = None, "", "", b"", url
+        status, ctype, cenc, body, saki, midashi = None, "", "", b"", url, None
         try:
             with op.open(req, timeout=TIMEOUT) as r:
                 status, ctype = r.status, r.headers.get("Content-Type", "")
                 cenc = r.headers.get("Content-Encoding", "")
                 saki = r.geturl() or url
                 body = r.read(ROBOTS_OOKISA + 1)
+                midashi = r.headers
         except urllib.error.HTTPError as e:
             status, ctype = e.code, e.headers.get("Content-Type", "") if e.headers else ""
             saki = getattr(e, "url", None) or getattr(e, "filename", None) or url
@@ -1464,6 +1558,13 @@ class Kado:
                  "robots.txt が、よその場所（%s）へ転送された" % saki)
             self._robots[key] = v
             return v
+        if status is not None and 200 <= status < 300 and len(body) <= ROBOTS_OOKISA:
+            why = kireta(midashi, len(body))
+            if why:
+                # 読めた部分を、robots.txt の全部として扱わない（正本 3.4a。確かめられなかった＝止める側）
+                v = ("確かめられなかった", None, None, "robots.txt が%s" % why)
+                self._robots[key] = v
+                return v
         if status is not None and 200 <= status < 300:
             self._robots_wo_hikaeru(host, url, body)
         jotai, groups, why = robots_hantei(status, ctype, body, cenc)
