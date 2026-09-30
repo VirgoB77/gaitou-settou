@@ -1992,7 +1992,9 @@ class 取得前の確かめの強め(Oki):
             for v in ("未確認（列を見ていない）", "未決（あとで決める）", "判断要：個人事業主の所在地", "分からない（まだ）", " 未確認"):
                 with self.subTest(k=k, v=v):
                     self.assertEqual(kado.seishiki_jotai(yoi_card(**{k: v}), True), "規約未確定")
+                    self.assertEqual(kado.seishiki_jotai(manual_card(**{k: v}), True), "規約未確定")     # manual も同じ
         self.assertEqual(kado.seishiki_jotai(yoi_card(), True), "取ってよい")
+        self.assertEqual(kado.seishiki_jotai(manual_card(), True), "取ってよい")
 
     def test_Canaryの限定の状態は本番の取ってよいと分ける(self):
         c = canary_card()
