@@ -1976,21 +1976,27 @@ class 取得前の確かめの強め(Oki):
                 self.assertEqual(riyuu == [], yoi, riyuu)
 
     def test_金庫をsymlinkでコードの置き場の中へ向けても止める(self):
-        naka = os.path.join(self.root, "_raw")
-        os.makedirs(naka)
-        soto = os.path.join(tempfile.mkdtemp(), "kinko")
-        self.addCleanup(shutil.rmtree, os.path.dirname(soto), True)
-        try:
-            os.symlink(naka, soto, target_is_directory=True)
-        except (OSError, NotImplementedError):
-            try:
-                import _winapi                                  # Windows：symlink の権限が無くても junction は作れる
-                _winapi.CreateJunction(naka, soto)
-            except (ImportError, OSError):
-                self.skipTest("この環境では symlink も junction も作れない")
-        self.env = dict(self.env, KINKO_DIR=soto)
-        riyuu = self.mon().kinko_preflight(os.path.join(soto, "raw"))
-        self.assertTrue(any("コードの置き場" in r for r in riyuu), riyuu)
+        """コードの置き場が git のとき（git 自身もリンクを解く）と、git でないとき（門が解かなければ通ってしまう）の2通り。"""
+        nashi = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, nashi, True)
+        for root in (self.root, nashi):
+            with self.subTest(git=root == self.root):
+                naka = os.path.join(root, "_raw")
+                os.makedirs(naka)
+                soto = os.path.join(tempfile.mkdtemp(), "kinko")
+                self.addCleanup(shutil.rmtree, os.path.dirname(soto), True)
+                try:
+                    os.symlink(naka, soto, target_is_directory=True)
+                except (OSError, NotImplementedError):
+                    try:
+                        import _winapi                          # Windows：symlink の権限が無くても junction は作れる
+                        _winapi.CreateJunction(naka, soto)
+                    except (ImportError, OSError):
+                        self.skipTest("この環境では symlink も junction も作れない")
+                env = dict(self.env, KINKO_DIR=soto)
+                k = kado.Kado(root, REPO, UA, env=env, transport=Nise({}))
+                riyuu = k.kinko_preflight(os.path.join(soto, "raw"))
+                self.assertTrue(any("コードの置き場" in r for r in riyuu), riyuu)
 
     def test_金庫の置き場が違えば外へ出す前に止まる(self):
         self.shounin()
