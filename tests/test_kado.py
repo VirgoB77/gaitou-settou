@@ -49,9 +49,11 @@ class Nise(urllib.request.BaseHandler):
         self.kotae = kotae
         self.kita = []
         self.nanori = []           # 来た要求の名乗り（User-Agent）
+        self.naka = []             # 来た要求の (メソッド, 中身, 見出し)
 
     def _open(self, req):
         self.kita.append(req.full_url)
+        self.naka.append((req.get_method(), req.data, dict(req.header_items())))
         self.nanori.append(req.get_header("User-agent") or req.unredirected_hdrs.get("User-agent"))
         kotae = self.kotae.get(req.full_url, (404, {}, b""))
         status, headers, body = kotae[:3]
@@ -1646,6 +1648,191 @@ class 公開情報の取得と事実データの利用(Oki):
         # 取得元が「外す」なら、web の route でも商品に使わない
         cards["tameshi"] = konkyo5_card(商品用継続観測の可否="外す")
         self.assertEqual(kado.shouhin_ni_tsukaeru([web], cards)[0], [])
+
+
+ACTION = "https://%s/resource/?id=21424" % HOST
+FORM_ATAI = {"upload_file": "20260901_一覧（令和8年7月）.xlsx", "upload_url": "", "download": "このデータをダウンロード"}
+XLSX = (200, {"Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}, b"PK\x03\x04tameshi")
+
+
+def form_card(**kae):
+    """public_form_post（公開 Web の download form）の、そろったカード。"""
+    c = yoi_card(**{
+        "route種別": "public_form_post",
+        "承認する取得方法": {"URL範囲": [ACTION], "対象種類": "XLSX", "ページ送り・深さ": "なし（1本）",
+                         "API/feed": "なし", "承認頻度": "1回"},
+        "公開form": {"action": ACTION, "method": "POST", "送る値": dict(FORM_ATAI), "見たページ": ACTION,
+                   "見た日": "2026-09-30"}})
+    c.update(kae)
+    return c
+
+
+class HTTPメソッドとpublic_form_post(Oki):
+    """正本 3.4a。web・api・member は GET だけ。public_form_post は、カードの「公開form」と action・中身が
+    1字も違わない POST だけ（Cookie・Authorization・Referer なし）。**POST の転送は辿らない。** GET の転送はこれまでどおり。"""
+
+    def setUp(self):
+        super().setUp()
+        self.cards["tameshi-f"] = form_card()
+        self.kaku_all()
+
+    def fmon(self, kotae=None, **kw):
+        return self.mon(kotae if kotae is not None else {"https://%s/robots.txt" % HOST: ROBOTS_OK, ACTION: XLSX}, **kw)
+
+    def dasu(self, k, cid, req):
+        k.install()
+        with k.sesshon(cid, hozon_saki=os.path.join(self.kinko, "raw")):
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, r.read()
+
+    def post(self, data=None, url=ACTION, **midashi):
+        if data is None:
+            data = kado.form_nakami(form_card()["公開form"])
+        return urllib.request.Request(url, data=data, headers=midashi, method="POST")
+
+    def test_webのGETは変わらない(self):
+        self.shounin()
+        k = self.mon()
+        self.assertEqual(self.toru(k), b"<html>ok</html>")
+        self.assertEqual([n[0] for n in self.nise.naka], ["GET", "GET"])          # robots.txt と本文
+
+    def test_webのrouteではGET以外を出さない(self):
+        self.shounin()
+        k = self.mon()
+        for m in ("POST", "HEAD", "PUT", "DELETE", "PATCH"):
+            with self.subTest(m=m):
+                req = urllib.request.Request(URL, data=b"a=1" if m in ("POST", "PUT", "PATCH") else None, method=m)
+                with self.assertRaises(kado.Tomeru) as cm:
+                    self.dasu(k, "tameshi", req)
+                self.assertIn("route「web」では HTTP %s を出さない" % m, str(cm.exception))     # メソッドの段で止まる
+        self.assertEqual(self.nise.kita, [])                                        # robots.txt も取りに行かない
+
+    def test_apiとmemberもGETだけ(self):
+        for route in ("api", "member"):
+            with self.subTest(route=route):
+                cid = "tameshi-" + route
+                self.cards[cid] = yoi_card(route種別=route, 肯定根拠番号="3")
+                self.kaku_all()
+                self.shounin(cid)
+                with self.assertRaises(kado.Tomeru) as cm:
+                    self.dasu(self.mon(), cid, urllib.request.Request(URL, data=b"a=1", method="POST"))
+                self.assertIn("route「%s」では HTTP POST を出さない" % route, str(cm.exception))
+                self.assertEqual(self.nise.kita, [])
+
+    def test_公開formと1字も違わないPOSTだけ通す(self):
+        self.shounin("tameshi-f")
+        k = self.fmon()
+        self.assertEqual(self.dasu(k, "tameshi-f", self.post()), (200, b"PK\x03\x04tameshi"))
+        m, data, midashi = self.nise.naka[-1]
+        self.assertEqual((m, data), ("POST", kado.form_nakami(form_card()["公開form"])))
+        import urllib.parse as up
+        self.assertEqual(data, up.urlencode(list(FORM_ATAI.items()), encoding="utf-8").encode("ascii"))    # カードに書いた順
+        self.assertFalse({"Cookie", "Authorization", "Referer"} & set(midashi))
+        self.assertIsNone(k.tensou_saki)
+
+    def test_中身が1字違う_欄を足す_欄が欠けるPOSTは出さない(self):
+        self.shounin("tameshi-f")
+        k = self.fmon()
+        import urllib.parse as up
+        for atai in (dict(FORM_ATAI, upload_file=FORM_ATAI["upload_file"][:-1] + "X"),       # 1字違い
+                     dict(FORM_ATAI, extra="1"),                                             # 欄を足す
+                     {a: b for a, b in FORM_ATAI.items() if a != "upload_url"},              # 欄が欠ける
+                     dict(reversed(list(FORM_ATAI.items())))):                               # 並びが違う
+            with self.subTest(atai=list(atai)):
+                data = up.urlencode(list(atai.items()), encoding="utf-8").encode("ascii")
+                with self.assertRaises(kado.Tomeru):
+                    self.dasu(k, "tameshi-f", self.post(data=data))
+        with self.assertRaises(kado.Tomeru):
+            self.dasu(k, "tameshi-f", self.post(data="x=1"))                               # bytes でない中身
+        self.assertEqual(self.nise.kita, [])
+
+    def test_actionが違うPOSTは出さない(self):
+        self.shounin("tameshi-f")
+        k = self.fmon()
+        for url in (ACTION + "0", ACTION.replace("21424", "21425"), ACTION.replace("https://", "http://")):
+            with self.subTest(url=url):
+                with self.assertRaises(kado.Tomeru):
+                    self.dasu(k, "tameshi-f", self.post(url=url))
+        self.assertEqual(self.nise.kita, [])
+
+    def test_CookieやAuthorizationやRefererの付いたPOSTは出さない(self):
+        self.shounin("tameshi-f")
+        k = self.fmon()
+        for midashi in ({"Cookie": "a=b"}, {"Authorization": "Bearer x"}, {"Proxy-Authorization": "Basic x"},
+                        {"Referer": ACTION}):
+            with self.subTest(midashi=list(midashi)):
+                with self.assertRaises(kado.Tomeru):
+                    self.dasu(k, "tameshi-f", self.post(**midashi))
+        self.assertEqual(self.nise.kita, [])
+
+    def test_POSTの転送は辿らない_Locationを記録して止める(self):
+        self.shounin("tameshi-f")
+        saki = "https://%s/files/x.xlsx" % HOST
+        k = self.fmon({"https://%s/robots.txt" % HOST: ROBOTS_OK, ACTION: (302, {"Location": saki}, b""), saki: XLSX})
+        with self.assertRaises(kado.Tomeru):
+            self.dasu(k, "tameshi-f", self.post())
+        self.assertEqual(k.tensou_saki, saki)
+        self.assertNotIn(saki, self.nise.kita)
+        self.assertEqual([n[0] for n in self.nise.naka], ["GET", "POST"])            # robots.txt と POST だけ
+
+    def test_GETの転送はこれまでどおり門を通して辿る(self):
+        self.shounin()
+        saki = "https://%s/data/list2.html" % HOST
+        k = self.mon({"https://%s/robots.txt" % HOST: ROBOTS_OK, URL: (302, {"Location": saki}, b""), saki: HONBUN})
+        self.assertEqual(self.toru(k), b"<html>ok</html>")
+        self.assertIn(saki, self.nise.kita)
+        self.assertIsNone(k.tensou_saki)
+
+    def test_POSTに401_403_429_503が返ったらその相手を止める(self):
+        self.shounin("tameshi-f")
+        for code in (401, 403, 429, 503):
+            with self.subTest(code=code):
+                kyou = self.p("data", "ref", "aite-kyou.json")
+                if os.path.exists(kyou):
+                    os.remove(kyou)
+                k = self.fmon({"https://%s/robots.txt" % HOST: ROBOTS_OK, ACTION: (code, {}, b"")}, run_id="run-%d" % code)
+                with self.assertRaises(urllib.error.HTTPError):
+                    self.dasu(k, "tameshi-f", self.post())
+                self.assertIn("ためし県", k._tomatta)
+
+    def test_公開formの形が違うカードは取ってよいにならない(self):
+        f = form_card()["公開form"]
+        for kae in ({"公開form": None}, {"公開form": dict(f, method="GET")},
+                    {"公開form": dict(f, action=ACTION.replace("https://", "http://"))},
+                    {"公開form": dict(f, action="https://hoka.example.jp/resource/?id=1")},
+                    {"公開form": dict(f, action="https://%s/other/?id=1" % HOST)},                # URL範囲の外
+                    {"公開form": dict(f, 送る値={})}, {"公開form": dict(f, 送る値={"a": 1})},
+                    {"公開form": dict(f, 送る値={" ": "x"})},
+                    {"公開form": dict(f, 見たページ="https://hoka.example.jp/")},
+                    {"公開form": dict(f, 見た日="きのう")},
+                    # URL範囲 を合わせても、action は https で対象host の中でなければならない
+                    {"公開form": dict(f, action=ACTION.replace("https://", "http://")),
+                     "承認する取得方法": dict(form_card()["承認する取得方法"], URL範囲=[ACTION.replace("https://", "http://")])},
+                    {"公開form": dict(f, action="https://hoka.example.jp/resource/?id=1"),
+                     "承認する取得方法": dict(form_card()["承認する取得方法"], URL範囲=["https://hoka.example.jp/resource/"])}):
+            with self.subTest(kae=str(kae)[:60]):
+                self.assertEqual(kado.seishiki_jotai(form_card(**kae), True), "規約未確定")
+        self.assertEqual(kado.seishiki_jotai(form_card(), True), "取ってよい")
+        self.assertIn("public_form_post", kado.ROUTE)
+
+    def test_manualのカードはsesshonに入れない(self):
+        """manual は機械の取得をしない。**カードの門（sesshon）で止まる**（メソッドの段より前）。"""
+        self.cards["tameshi-m"] = manual_card()
+        self.kaku_all()
+        self.shounin("tameshi-m")
+        k = self.mon()
+        with self.assertRaises(kado.Tomeru) as cm:
+            with k.sesshon("tameshi-m", hozon_saki=os.path.join(self.kinko, "raw")):
+                pass
+        self.assertIn("manual", str(cm.exception))
+        self.assertEqual(self.nise.kita, [])
+
+    def test_セッションの外のPOSTは出さない(self):
+        k = self.fmon()
+        k.install()
+        with self.assertRaises(kado.Tomeru):
+            urllib.request.urlopen(self.post(), timeout=5)
+        self.assertEqual(self.nise.kita, [])
 
 
 T_MIRU = "2026-09-25T07:00:00+09:00"

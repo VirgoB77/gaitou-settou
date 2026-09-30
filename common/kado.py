@@ -79,7 +79,13 @@ STOP_JOKEN = ("robots", "アクセス制御", "明示的なbot禁止", "相手�
 # 「当たる」と書いた STOP 条件は、どの根拠番号でも「取ってよい」にしない
 STOP_ATARU = re.compile(r"^\s*当たる")
 # route の種別（正本 3.4a。同じ会社でも別 route。1 route＝1カード）
-ROUTE = ("web", "api", "member", "manual")
+ROUTE = ("web", "api", "member", "manual", "public_form_post")
+# route ごとに門が通す HTTP メソッド（正本 3.4a）。web・api・member は GET だけ（api で GET 以外が要るときは、
+# カードで承認する欄を足してから）。manual は機械の取得をしない。public_form_post の POST は、カードの「公開form」と
+# action・送る中身が1字も違わないものだけ（GET は form のあるページを確かめるため）
+METHOD_ROUTE = {"web": ("GET",), "api": ("GET",), "member": ("GET",), "public_form_post": ("GET", "POST")}
+# public_form_post の POST に付けない見出し（Cookie に頼らない・認証を使わない・参照元を偽らない）
+POST_KINSHI_MIDASHI = ("Cookie", "Authorization", "Proxy-Authorization", "Referer")
 ROUTE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,80}\Z")
 # 商品用の継続観測にしてよいか（正本 3.4a）。「可」でなければ本番の継続観測をしない
 #   外す      事実・数値・データそのものの DB 化・蓄積・収集・商用利用の禁止が明示されている
@@ -270,6 +276,36 @@ def _url_host(url):
     return h
 
 
+def koukai_form(card):
+    """public_form_post のカードの「公開form」。**形が違えば None**（正本 3.4a）。
+
+    action：https で、対象host の中・承認する URL範囲 の中　method：POST
+    送る値：空でない名前と文字列の値の組（公開の form の HTML にあるものだけを写す）
+    見たページ：form を見た公開ページ（対象host の中）　見た日：YYYY-MM-DD
+    """
+    f = card.get("公開form") if isinstance(card, dict) else None
+    if not isinstance(f, dict) or f.get("method") != "POST":
+        return None
+    act, vals, page = f.get("action"), f.get("送る値"), f.get("見たページ")
+    hosts = taisho_host(card) or []
+    if not (isinstance(act, str) and act.startswith("https://") and _url_host(act) in hosts):
+        return None
+    han = (card.get("承認する取得方法") or {}).get("URL範囲") or []
+    if not any(isinstance(x, str) and x and act.startswith(x) for x in han):
+        return None
+    if not (isinstance(vals, dict) and vals
+            and all(isinstance(k, str) and k.strip() and isinstance(v, str) for k, v in vals.items())):
+        return None
+    if not (isinstance(page, str) and _url_host(page) in hosts) or _hi(f.get("見た日")) is None:
+        return None
+    return f
+
+
+def form_nakami(f):
+    """「公開form」の送る値から、送る中身を作る（application/x-www-form-urlencoded・UTF-8・カードに書いた順）。"""
+    return urllib.parse.urlencode(list(f["送る値"].items()), encoding="utf-8").encode("ascii")
+
+
 # ------------------------------------------------------------------ 正式状態
 def _manual_kaketeiru(card):
     """manual の route の「取ってよい」（人が見て記録してよい）に要る欄のうち、空いているもの（正本 3.4a）。
@@ -333,7 +369,9 @@ def _kaketeiru(card):
     # route と出どころ（正本 3.4a）。1 route＝1カード。観測の記録にそのまま載る
     route = card.get("route種別")
     if route not in ROUTE:
-        nai.append("route種別（web／api／member／manual）")
+        nai.append("route種別（web／api／member／manual／public_form_post）")
+    elif route == "public_form_post" and koukai_form(card) is None:
+        nai.append("公開form（action・method POST・送る値・見たページ・見た日）")
     if not ROUTE_ID.match(str(card.get("source_id") or "")):
         nai.append("source_id（英小文字・数字・-）")
     if taisho_host(card) is None:
@@ -759,6 +797,7 @@ class Kado:
         # 観測を出どころつき（Kado.kansoku_hozon）で保存する段か。**そうでない段は本番の取得に入れない**（正本 3.4a）
         self.kansoku_demoto = kansoku_demoto is True
         self._yoyaku_ari = set()       # この処理で予約を証明できた相手
+        self.tensou_saki = None        # POST の応答が転送だったときの Location（辿らずに止めた）
         self._yoyaku_dame = {}         # 相手 -> 予約できなかった理由（この処理ではもう試さない）
 
     def _p(self, rel):
@@ -1506,6 +1545,38 @@ class Kado:
             self.kiroku.append((cid, url, "出した", ""))
             return aite
 
+    def method_mon(self, req):
+        """route ごとの HTTP メソッド（正本 3.4a）。止めるなら Tomeru。**通信の前**（robots も取りに行かない）。
+
+        web・api・member は GET だけ。public_form_post は、form のページを確かめる GET と、カードの「公開form」と
+        action・送る中身が1字も違わず、Cookie・Authorization・Referer の見出しが無い POST だけ。
+        """
+        with self._lock:
+            cur = self._genzai
+        if cur is None:
+            raise Tomeru("カードの門を通っていない通信（セッションの外）")
+        cid, card, _ = cur
+        route = card.get("route種別")
+        m = req.get_method()
+        riyuu = []
+        if m not in METHOD_ROUTE.get(route, ()):
+            riyuu.append("route「%s」では HTTP %s を出さない" % (route or "空", m))
+        elif m == "POST":
+            f = koukai_form(card)
+            midashi = {h.lower() for h in list(req.headers) + list(req.unredirected_hdrs)}
+            if f is None:
+                riyuu.append("カードの公開form の形が違う")
+            elif req.full_url != f["action"]:
+                riyuu.append("POST の宛先がカードの action と違う")
+            elif not isinstance(req.data, bytes) or req.data != form_nakami(f):
+                riyuu.append("POST の中身がカードの送る値と違う")
+            kinshi = [h for h in POST_KINSHI_MIDASHI if h.lower() in midashi]
+            if kinshi:
+                riyuu.append("POST に %s の見出しを付けない" % "・".join(kinshi))
+        if riyuu:
+            self.kiroku.append((cid, req.full_url, "止めた", "／".join(riyuu)))
+            raise Tomeru(riyuu)
+
     def opener(self):
         k = self
 
@@ -1513,6 +1584,7 @@ class Kado:
             handler_order = 100
 
             def http_request(self, req):
+                k.method_mon(req)
                 req.add_unredirected_header("User-Agent", k.ua)
                 req._kado_aite = k.url_mon(req.full_url)
                 return req
@@ -1532,7 +1604,22 @@ class Kado:
 
             https_response = http_response
 
-        handlers = [_Mihari()]
+        class _TensouMihari(urllib.request.HTTPRedirectHandler):
+            """**POST の応答の転送は辿らない**（正本 3.4a public_form_post）。Location を記録して止める。
+            GET の転送は、これまでどおり1本ずつ門を通して辿る。"""
+
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                if req.get_method() == "POST":
+                    k.tensou_saki = newurl
+                    cid = (k._genzai or ("",))[0]
+                    k.kiroku.append((cid, req.full_url, "止めた", "POST の応答が転送（HTTP %s → %s）" % (code, newurl)))
+                    try:
+                        fp.close()
+                    finally:
+                        raise Tomeru(["POST の応答が転送（HTTP %s・Location %s）。辿らずに止めた" % (code, newurl)])
+                return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+        handlers = [_Mihari(), _TensouMihari()]
         if self.transport is not None:
             handlers.insert(0, self.transport)
         return urllib.request.build_opener(*handlers)
