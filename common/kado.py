@@ -93,7 +93,7 @@ FUKAKUTEI_NASHI = ("なし", "取得を止める不確定事項なし")
 # 観測の記録に持たせる出どころ（正本 3.4a）。manual はさらに記録者の役割・見た URL
 DEMOTO = ("source_id", "route_id", "route_kind", "observed_at")
 DEMOTO_MANUAL = ("recorder_role", "source_url")
-# manual の route（人が普通のブラウザで見て、事実だけを書く）。初めの安全な既定値は、同じ route に1日1回まで
+# manual の route（人が普通のブラウザで見て、事実だけを書く）。初めのきつい側の既定値は、同じ相手に1日1回まで（route をまたぐ）
 MANUAL_HINDO = ("1日1回", "週1回", "月2回", "月1回")
 # manual の履歴（追記。相手・route・日。頻度を数えるのに使う。読めなければ止める）
 MANUAL_RIREKI = os.path.join("data", "ref", "manual-rireki.json")
@@ -474,10 +474,10 @@ def demoto_tarinai(rec):
 def _manual_hindo(rireki, cid, aite, hindo, today):
     """manual の頻度（正本 3.4a。監査 B-02）。止める理由の並び（空ならよい）。
 
-    **同じ相手は、route をまたいで1日1回まで**（日本時間の同じ日。初めの安全な既定値）。そのうえで、その route は
+    **同じ相手は、route をまたいで1日1回まで**（日本時間の同じ日。初めのきつい側の既定値）。そのうえで、その route は
     カードの頻度まで。**前の記録からの日数で数える**（rolling window。統括判断 2026-09-30）：
     1日1回＝同じ日に1回、週1回＝前の記録から7日未満なら止める、月1回＝前の記録から30日未満なら止める、
-    月2回＝直近30日未満に2件あれば止める。**暦の週・月の境目ではリセットしない**（相手への負荷を抑える安全の線で、
+    月2回＝直近30日未満に2件あれば止める。**暦の週・月の境目ではリセットしない**（相手への負荷を抑える線で、
     集計の週・月ではない。月末→月初、日曜→月曜だけで続けて記録できないようにする）。
     **manual-rireki.json に今日より後の日が1件でもあれば、相手・route を問わず止める**（台帳そのものの時刻の
     整合・破損を疑う条件。特定の相手の頻度の問題ではない。統括判断 2026-09-30）。
@@ -799,8 +799,8 @@ class Kado:
         """このカード（route）で取った観測の記録に付ける出どころ（正本 3.4a）。"""
         return demoto(cid, self.card(cid), observed_at, source_url, recorder_role)
 
-    def _kansoku_kaku(self, cid, rows, hozon_saki):
-        """観測を金庫へ書く。**出どころが1件でも欠けていれば、1件も書かない**（Tomeru）。書いた場所を返す。"""
+    def _kansoku_tashikame(self, cid, rows, hozon_saki):
+        """観測を金庫へ書く前の確かめ。止める理由の並び（空ならよい）。**書かない。**"""
         card = self.card(cid)
         riyuu = list(self.kinko_preflight(hozon_saki))
         if not isinstance(card, dict):
@@ -817,21 +817,40 @@ class Kado:
                 if isinstance(card, dict) and (d["route_id"] != cid or d["route_kind"] != card.get("route種別")
                                                or d["source_id"] != card.get("source_id")):
                     riyuu.append("%d件目の出どころが、このカード（route）と合わない" % (i + 1))
+        return riyuu
+
+    def _kansoku_kaku(self, cid, rows, hozon_saki):
+        """観測を金庫へ書く。**出どころが1件でも欠けていれば、1件も書かない**（Tomeru）。書いた場所を返す。
+
+        **書き終えてから名前を付ける**：一時ファイルに全部書いてから、名前のある場所へ hard link する
+        （上書きしない）。途中で止まっても、書きかけの観測が名前のある場所に残らない。
+        """
+        riyuu = self._kansoku_tashikame(cid, rows, hozon_saki)
         if riyuu:
             self.kiroku.append((cid, "", "保存しなかった", "／".join(riyuu)))
             raise Tomeru(riyuu)
+        body = json.dumps({"schema": KANSOKU_SCHEMA, "route_id": cid, "rows": rows},
+                          ensure_ascii=False, indent=1, sort_keys=True) + "\n"
         atama = "%s_%s" % (self.today, re.sub(r"[^0-9A-Za-z-]", "_", str(self.run_id)))
-        for i in range(1, 100):
-            path = os.path.join(hozon_saki, "%s%s.json" % (atama, "" if i == 1 else "-%d" % i))
+        fd, tmp = tempfile.mkstemp(dir=hozon_saki, prefix=".kansoku-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fp:
+                fp.write(body)
+                fp.flush()
+                os.fsync(fp.fileno())
+            for i in range(1, 100):
+                path = os.path.join(hozon_saki, "%s%s.json" % (atama, "" if i == 1 else "-%d" % i))
+                try:
+                    os.link(tmp, path)
+                    return path
+                except FileExistsError:
+                    continue
+            raise OSError("観測の名前が100通り埋まっている")
+        finally:
             try:
-                with open(path, "x", encoding="utf-8", newline="\n") as fp:
-                    json.dump({"schema": KANSOKU_SCHEMA, "route_id": cid, "rows": rows}, fp,
-                              ensure_ascii=False, indent=1, sort_keys=True)
-                    fp.write("\n")
-                return path
-            except FileExistsError:
-                continue
-        raise OSError("観測の名前が100通り埋まっている")
+                os.remove(tmp)
+            except OSError:
+                pass
 
     def kansoku_hozon(self, cid, rows, hozon_saki):
         """**本番の観測を保存する境界**（正本 3.4a）。出どころ（source_id・route_id・route_kind・observed_at、
@@ -885,6 +904,10 @@ class Kado:
 
         1回の件数は、カードの記録件数上限まで。同じ相手は route をまたいで1日1回まで、その route はカードの頻度まで
         （履歴は data/ref/manual-rireki.json）。見た URL の host は、カードの対象host の並びのどれかと完全に一致するときだけ。
+
+        **保存の順は、先に履歴、あとで観測。** 観測を書いたあと・履歴を書く前に止まると、観測だけ残って履歴が無く、
+        次の記録を誤って通す。先に履歴を書けば、そのあとで止まっても「履歴だけ残る」（多めに数える＝止まる側）。
+        書く前の確かめ（金庫・出どころ）は、履歴を書く前に全部すませる。
         """
         riyuu = self.manual_mon(cid)
         card = self.card(cid) or {}
@@ -915,13 +938,15 @@ class Kado:
                 d = demoto(cid, card, observed_at, source_url, recorder_role)
             except ValueError as e:
                 riyuu.append(str(e))
+        if not riyuu:
+            rows_d = [dict(r, demoto=d) for r in rows]
+            riyuu += self._kansoku_tashikame(cid, rows_d, hozon_saki)
         if riyuu:
             self.kiroku.append((cid, "", "記録しなかった", "／".join(riyuu)))
             raise Tomeru(riyuu)
-        path = self._kansoku_kaku(cid, [dict(r, demoto=d) for r in rows], hozon_saki)
         rireki.append({"hi": self.today, "aite": aite, "route_id": cid, "run": self.run_id, "repo": self.repo})
         _kaku(self._p(MANUAL_RIREKI), {"schema": MANUAL_RIREKI_SCHEMA, "kiroku": rireki})
-        return path
+        return self._kansoku_kaku(cid, rows_d, hozon_saki)
 
     def _manual_rireki(self):
         """manual の履歴の並びと、読めないときの理由。**読めない・形が違うなら止める側**（数え方を信じない）。

@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 import urllib.response
@@ -1825,7 +1826,7 @@ class manualの承認経路(Oki):
                                                for hi, aite, rid in kiroku]}, f, ensure_ascii=False)
 
     def test_今日より後の記録が1件でもあれば_相手もrouteも問わず止める(self):
-        """manual-rireki.json は manual の頻度の判定全体の安全台帳。先の日は台帳そのものの時刻・破損を疑う条件。"""
+        """manual-rireki.json は manual の頻度の判定全体の台帳。先の日は台帳そのものの時刻・破損を疑う条件。"""
         self.shounin("tameshi-m")
         for kiroku in ((("2026-12-01", "ためし県", "tameshi-m2"),),      # 同じ相手・別の route
                        (("2026-12-01", "ほかの県", "hoka-m"),),           # 別の相手
@@ -1903,6 +1904,76 @@ class manualの承認経路(Oki):
                     self.kiroku(self.mon(run_id="run-u%d" % i), url=url)
         self.assertFalse(os.path.exists(self.saki) and os.listdir(self.saki))
         self.kiroku(self.mon(run_id="run-ok"), url=URL)                     # userinfo を外せば通る
+
+    # ---- Production Readiness：manual の保存の順（先に履歴、あとで観測）
+    def kansoku_no_kazu(self):
+        if not os.path.isdir(self.saki):
+            return 0
+        return len([f for f in os.listdir(self.saki) if f.endswith(".json")])
+
+    def rireki_no_kazu(self):
+        pth = self.p("data", "ref", "manual-rireki.json")
+        return len(json.load(open(pth, encoding="utf-8"))["kiroku"]) if os.path.exists(pth) else 0
+
+    def test_保存の順_履歴を書けなければ観測も書かない_観測だけ残らない(self):
+        self.shounin("tameshi-m")
+        with mock.patch.object(kado, "_kaku", side_effect=OSError("履歴を書けない")):
+            with self.assertRaises(OSError):
+                self.kiroku_hi("2026-10-05")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (0, 0))
+        # 再実行：何も残っていないので、同じ日にもう一度記録できる（二重にはならない）
+        self.kiroku_hi("2026-10-05")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (1, 1))
+
+    def test_保存の順_観測を書けなければ履歴だけ残り_止まる側に数える(self):
+        self.shounin("tameshi-m")
+        with mock.patch.object(kado.os, "link", side_effect=OSError("観測を書けない")):
+            with self.assertRaises(OSError):
+                self.kiroku_hi("2026-10-05")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (0, 1))
+        self.assertEqual([f for f in os.listdir(self.saki) if f.startswith(".kansoku-")], [])   # 書きかけも残さない
+        # 再実行：同じ日は、履歴だけ残った1件で止まる。履歴は二重にならない
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku_hi("2026-10-05", run="run-again")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (0, 1))
+        # 次の日（1日1回）は通る
+        self.kiroku_hi("2026-10-06")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (1, 2))
+
+    def test_保存の順_観測を書いている途中で止まっても_書きかけの観測は残らない(self):
+        self.shounin("tameshi-m")
+        with mock.patch.object(kado.os, "fsync", side_effect=OSError("書いている途中で止まった")):
+            with self.assertRaises(OSError):
+                self.kiroku_hi("2026-10-05")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (0, 1))
+        self.assertEqual(os.listdir(self.saki), [])                        # 名前のある観測も一時ファイルも無い
+        with self.assertRaises(kado.Tomeru):                              # 同じ日の再試行は止まる
+            self.kiroku_hi("2026-10-05", run="run-again")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (0, 1))
+
+    def test_保存の順_hard_linkのできない置き場では観測を保存しない(self):
+        self.shounin("tameshi-m")
+        with mock.patch.object(kado.os, "link", side_effect=PermissionError("この置き場は hard link できない")):
+            with self.assertRaises(OSError):
+                self.kiroku_hi("2026-10-05")
+        self.assertEqual(os.listdir(self.saki), [])
+        self.assertEqual(self.rireki_no_kazu(), 1)                         # 止まる側に数える
+
+    def test_保存の順_書く前の確かめで止まるなら履歴も書かない(self):
+        self.shounin("tameshi-m")
+        k = self.mon(today="2026-10-05", run_id="run-x")
+        with self.assertRaises(kado.Tomeru):                              # 金庫の外
+            k.manual_kiroku("tameshi-m", [{"price": 1}], "2026-10-05T10:00:00+09:00", URL, "運営者",
+                            self.p("data", "manual"))
+        self.assertEqual(self.rireki_no_kazu(), 0)
+        self.kiroku_hi("2026-10-05")                                        # 止まった分は数えない
+
+    def test_保存の順_成功した記録は二重にならない(self):
+        self.shounin("tameshi-m")
+        self.kiroku_hi("2026-10-05")
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku_hi("2026-10-05", run="run-again")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (1, 1))
 
     # ---- 監査 B-03：対象host は hostname の並び。照合は完全一致だけ
     def test_対象hostが文字列1本や形の違う並びなら正式状態にならない(self):
@@ -2054,6 +2125,29 @@ class 本番の保存の境界(Oki):
                         ({"observed_at": "NOT-A-DATE"}, "observed_at")):
             with self.subTest(kae=kae):
                 self.assertIn(ke, kado.demoto_tarinai({"demoto": dict(m, **kae)}))
+
+    def test_機械の観測も_書いている途中で止まれば何も残らない(self):
+        k = self.mon()
+        row = {"price": 1, "demoto": k.demoto("tameshi", T_MIRU)}
+        for err in (mock.patch.object(kado.os, "fsync", side_effect=OSError("書いている途中で止まった")),
+                    mock.patch.object(kado.os, "link", side_effect=PermissionError("hard link できない"))):
+            with self.subTest(err=err.attribute):
+                with err:
+                    with self.assertRaises(OSError):
+                        k.kansoku_hozon("tameshi", [row], self.saki)
+                self.assertEqual(os.listdir(self.saki), [])
+
+    def test_観測は書き終えてから名前を付ける(self):
+        """名前を付けるところで止まっても、名前のある観測も、書きかけの一時ファイルも残らない。"""
+        k = self.mon()
+        row = {"price": 1, "demoto": k.demoto("tameshi", T_MIRU)}
+        with mock.patch.object(kado.os, "link", side_effect=OSError("名前を付けられない")):
+            with self.assertRaises(OSError):
+                k.kansoku_hozon("tameshi", [row], self.saki)
+        self.assertEqual(os.listdir(self.saki), [])
+        path = k.kansoku_hozon("tameshi", [row], self.saki)
+        self.assertEqual(os.listdir(self.saki), [os.path.basename(path)])
+        self.assertEqual(json.load(open(path, encoding="utf-8"))["rows"], [row])
 
     def test_出どころつきで保存すると名乗った段は_kansoku_hozonを呼ぶ(self):
         """置き場の .py を歩いて見る（名前の一覧で決め打ちしない）。検査と common は外す。"""
