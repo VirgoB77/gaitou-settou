@@ -548,7 +548,7 @@ def yoi_card(**kae):
         "対象URL": GURL, "対象host": [GHOST, GHOST2],
         "個人情報を含みうる": "分からない", "当事者に個人がありうる": "分からない",
         "個票の粒度": "集計のみ（個票なし）", "所在地の扱い": "個人の所在地は無い",
-        # 個人情報・個票の取得前ゲート（民間公開Web v3 §6）。未決なら門が通さない
+        # 個人情報・個票の取得前ゲート（正本 3.1・3.4a）。未決なら門が通さない
         "氏名を含みうる": "いいえ", "個人の電話番号を含みうる": "いいえ",
         "個人の生活住所を含みうる": "いいえ",
         "privateに保存する予定": "取得したページそのまま", "publicに出す予定": "件数の集計だけ",
@@ -564,6 +564,9 @@ def yoi_card(**kae):
         "統括判定案": "取ってよい", "判定理由": "利用条件が複製・加工・商用を明示的に許している",
         "肯定根拠番号": "1", "不確定事項": "なし", "専門家確認": "不要",
         "再確認期限": "2026-12-31", "再確認理由": "年1回の規約改定に合わせる",
+        # 正本 3.4a（2026-09-29）：route と出どころ・商品用の継続観測の可否
+        "route種別": "web", "source_id": "tameshi-ken", "商品用継続観測の可否": "可",
+        "このrouteのデータを商品に使えるか": "使える",
         "カード版": 1,
     }
     c.update(kae)
@@ -625,7 +628,9 @@ class GateBase(unittest.TestCase):
     def mon(self, kotae):
         self.nise = Nise(kotae)
         self.naps = []
-        return kado.Kado(self.root, REPO, UA, env=self.env, transport=self.nise,
+        # 門の挙動（robots・混雑・転送など）を試すので、観測を出どころつきで保存する段として作る（正本 3.4a）。
+        # **本番の取得段はまだこれを名乗っていない**ので、本番では sesshon で止まる（残作業 57）
+        return kado.Kado(self.root, REPO, UA, kansoku_demoto=True, env=self.env, transport=self.nise,
                          run_id="run-1", sleep=self.naps.append, now=lambda: ASA + 1000.0)
 
     def kinko_raw(self):

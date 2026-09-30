@@ -1,7 +1,8 @@
 """取りに行く前の門。**この門を通らない通信は、1本も出さない。**
 
-自動取得・スクレイピング運用基準 v1（統合案 rev2・rev3 の作業案）と、
-各サイトの固定線を、取得の入口1か所で守る。
+正本 3.4・3.4a（公開情報の取得と事実データの利用。2026-09-29）と、
+各サイトの固定線を、取得の入口1か所で守る。旧「自動取得・スクレイピング運用基準 v1
+（rev2・rev3）」「民間公開Web v3」などは履歴で、3.4a と食い違うところは判定に使わない。
 
     カード      取得元ごとの判定カード（data/ref/torimoto-card.json）
     承認        運営者の承認（data/ref/shounin/<カード>.json）。1カード1ファイル
@@ -65,10 +66,42 @@ KOJIN = ("はい", "いいえ", "分からない")
 SHUBETSU = ("行政", "準公的", "民間一次", "二次・集約")
 SEIKI = ("未調査", "無し", "有り・採用", "有り・不採用", "問い合わせ中")
 SENMONKA_TOMERU = "取得開始前に必要"
-KONKYO = ("1", "2", "3", "4")
-# 4 は行政等の公式な再利用条件（運用基準 v1 rev2 §4 C.4）。民間・二次集約には使えない
+KONKYO = ("1", "2", "3", "4", "5")
+# 4 は行政等の公式な再利用条件。民間・二次集約には使えない（正本 3.4a）
 KONKYO_GYOSEI_DAKE = ("4",)
-# 個人情報・個票の取得前ゲート（民間公開Web v3 §6）。カードの欄の名前
+# 5 は「公開された事実・数値の、通常の公開経路からの観測（STOP 条件に当たらないことを確認した
+# 記録つき）」（正本 3.4a）。**明示の許可が書いていないことは、それだけでは止める理由にしない**。
+# そのかわり、STOP 条件の全部について、確かめた記録が要る
+KONKYO_KANSOKU = "5"
+# 正本 3.4a の自動取得の STOP 条件（①〜⑩）。カードの「STOP条件の確認」の鍵
+STOP_JOKEN = ("robots", "アクセス制御", "明示的なbot禁止", "相手からの回答", "拒否状態", "負荷",
+              "同意済みの契約", "個人情報", "二次・集約", "想定外")
+# 「当たる」と書いた STOP 条件は、どの根拠番号でも「取ってよい」にしない
+STOP_ATARU = re.compile(r"^\s*当たる")
+# route の種別（正本 3.4a。同じ会社でも別 route。1 route＝1カード）
+ROUTE = ("web", "api", "member", "manual")
+ROUTE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,80}\Z")
+# 商品用の継続観測にしてよいか（正本 3.4a）。「可」でなければ本番の継続観測をしない
+#   外す      事実・数値・データそのものの DB 化・蓄積・収集・商用利用の禁止が明示されている
+#   読めない  規約が事実データを対象にしているか、DB 化・商用利用に当たるかが読めない
+#             （取得可否確認・構造確認・規約確認までにとどめる）
+SHOUHIN_KAHI = ("可", "外す", "読めない")
+# そのrouteで取ったものを商品に使えるか（API・会員の契約が第三者提供などを禁じていれば「使えない」）
+ROUTE_SHOUHIN = ("使える", "使えない", "未確認")
+# 取得を止める不確定事項が無いこと（商品化の側の未確認は「商品化の未確認事項」の欄で持つ）
+FUKAKUTEI_NASHI = ("なし", "取得を止める不確定事項なし")
+# 観測の記録に持たせる出どころ（正本 3.4a）。manual はさらに記録者の役割・見た URL
+DEMOTO = ("source_id", "route_id", "route_kind", "observed_at")
+DEMOTO_MANUAL = ("recorder_role", "source_url")
+# manual の route（人が普通のブラウザで見て、事実だけを書く）。初めのきつい側の既定値は、同じ相手に1日1回まで（route をまたぐ）
+MANUAL_HINDO = ("1日1回", "週1回", "月2回", "月1回")
+# manual の履歴（追記。相手・route・日。頻度を数えるのに使う。読めなければ止める）
+MANUAL_RIREKI = os.path.join("data", "ref", "manual-rireki.json")
+MANUAL_RIREKI_SCHEMA = 1
+# カードの対象host の1つ1つ（小文字の hostname。scheme・道すじ・空白・末尾の . は入れない）
+HOSTNAME = re.compile(r"(?=.{1,253}\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
+KANSOKU_SCHEMA = 1
+# 個人情報・個票の取得前ゲート（正本 3.1・3.4a）。カードの欄の名前
 KOJIN_GATE_SANCHI = ("当事者に個人がありうる", "氏名を含みうる", "個人の電話番号を含みうる",
                      "個人の生活住所を含みうる")
 KOJIN_GATE_KISAI = ("個票の粒度", "所在地の扱い", "privateに保存する予定", "publicに出す予定",
@@ -200,9 +233,90 @@ def shounin_sha(s):
     return ""
 
 
+# ------------------------------------------------------------------ 対象host
+def taisho_host(card):
+    """カードの対象host を hostname の並びで返す。**形が違えば None**（監査 B-03）。
+
+    並び（list）で、1つ以上あり、1つ1つが小文字の hostname の文字列であること。**文字列1本を並びとして
+    扱わない**（`in` が部分文字列の判定になり、"not-example.com" の中に "example.com" があることになる）。
+    照合は、この並びの要素との完全一致だけ。
+    """
+    h = card.get("対象host") if isinstance(card, dict) else None
+    if not isinstance(h, list) or not h:
+        return None
+    if not all(isinstance(x, str) and HOSTNAME.fullmatch(x) for x in h):
+        return None
+    return list(h)
+
+
+def _url_host(url):
+    """http(s) の URL の hostname（小文字）。読めない・http(s) でない・host が無いなら None。
+
+    **user・password（userinfo）が入った URL も None**（人や機械を、認証・ログイン・アクセス制御の回避に使わない。
+    出どころの source_url に認証の情報を残さない。独立再監査 2026-09-30）。
+    """
+    if not isinstance(url, str) or url != url.strip() or any(c.isspace() for c in url):
+        return None
+    try:
+        u = urllib.parse.urlsplit(url)
+        h = u.hostname
+        dare = (u.username, u.password)
+    except ValueError:
+        return None
+    if u.scheme not in ("http", "https") or not h:
+        return None
+    if dare != (None, None) or "@" in u.netloc:
+        return None
+    return h
+
+
 # ------------------------------------------------------------------ 正式状態
+def _manual_kaketeiru(card):
+    """manual の route の「取ってよい」（人が見て記録してよい）に要る欄のうち、空いているもの（正本 3.4a）。
+
+    **robots の拒否は、manual の拒否ではない**（robots は機械への指示）。そのかわり、人をアクセス制御の
+    回避に使わない：人にもログイン・CAPTCHA・チャレンジ・403 などが出るなら、manual にもしない。
+    """
+    nai = []
+    if not ROUTE_ID.match(str(card.get("source_id") or "")):
+        nai.append("source_id（英小文字・数字・-）")
+    if not str(card.get("対象URL") or "").startswith("https://"):
+        nai.append("対象URL（人が見るページ）")
+    hosts = taisho_host(card)
+    if hosts is None:
+        nai.append("対象host（hostname の並び。1本の文字列は不可）")
+    elif _url_host(card.get("対象URL")) not in hosts:
+        nai.append("対象URL の host が、対象host の並びに無い")
+    if card.get("人の通常閲覧") != "できる":
+        nai.append("人の通常閲覧（一般公開・ログイン不要で、人が普通のブラウザで見られる＝できる）")
+    if card.get("アクセス制御") != "なし":
+        nai.append("アクセス制御（人にもログイン・CAPTCHA・チャレンジ・403 などが出るなら manual にしない）")
+    kinshi = str(card.get("manual観測を禁じる文言・回答") or "")
+    if not kinshi.startswith("なし：") or not kinshi[3:].strip():
+        nai.append("manual観測を禁じる文言・回答（「なし：確かめた中身」の形。規約と相手の回答を見る）")
+    n = card.get("記録件数上限")
+    if not (type(n) is int and n >= 1):
+        nai.append("記録件数上限（1回に記録する件数の上限。1以上の整数）")
+    if card.get("頻度") not in MANUAL_HINDO:
+        nai.append("頻度（%s のどれか。1日1回を超えない）" % "・".join(MANUAL_HINDO))
+    for k in KOJIN_GATE_SANCHI:
+        if card.get(k) not in KOJIN:
+            nai.append("%s（はい／いいえ／分からない）" % k)
+    for k in KOJIN_GATE_KISAI:
+        v = str(card.get(k) or "").strip()
+        if not v or v in MIKETSU:
+            nai.append("%s（未決）" % k)
+    if card.get("商品用継続観測の可否") != "可":
+        nai.append("商品用継続観測の可否が「可」でない")
+    if not _hi(card.get("再確認期限")):
+        nai.append("再確認期限")
+    return nai
+
+
 def _kaketeiru(card):
     """「取ってよい」に要る欄のうち、空いているもの。"""
+    if card.get("route種別") == "manual":
+        return _manual_kaketeiru(card)
     nai = []
     shoseki = card.get("規約証跡") or {}
     hoho = card.get("承認する取得方法") or {}
@@ -214,9 +328,36 @@ def _kaketeiru(card):
     if bango not in KONKYO:
         nai.append("肯定根拠番号")
     elif bango in KONKYO_GYOSEI_DAKE and card.get("source種別") not in ("行政", "準公的"):
-        # 4（行政等の公式な再利用条件）は行政・準公的のためのもの。民間・二次集約は
-        # 1〜3（相手の明示許可・規約等の明示許可・公式の正規提供手段）だけ（民間公開Web v3 §3）
+        # 4（行政等の公式な再利用条件）は行政・準公的のためのもの（正本 3.4a）
         nai.append("肯定根拠番号（4 は行政・準公的の取得元だけ）")
+    # route と出どころ（正本 3.4a）。1 route＝1カード。観測の記録にそのまま載る
+    route = card.get("route種別")
+    if route not in ROUTE:
+        nai.append("route種別（web／api／member／manual）")
+    if not ROUTE_ID.match(str(card.get("source_id") or "")):
+        nai.append("source_id（英小文字・数字・-）")
+    if taisho_host(card) is None:
+        nai.append("対象host（hostname の並び。1本の文字列は不可）")
+    # STOP 条件（正本 3.4a ①〜⑩）。「当たる」と書いたものがあれば、どの根拠でも取ってよいにしない
+    joken = card.get("STOP条件の確認") if isinstance(card.get("STOP条件の確認"), dict) else {}
+    ataru = [k for k, v in joken.items() if isinstance(v, str) and STOP_ATARU.match(v)]
+    if ataru:
+        nai.append("STOP 条件に当たる（%s）" % "・".join(ataru))
+    if bango == KONKYO_KANSOKU:
+        # 根拠5：公開された事実・数値を、通常の公開経路（web）から観測する。
+        # 当たらなかった STOP 条件を全部、確かめた中身つきで書く（「該当文言なし」だけは不可）
+        if route != "web":
+            nai.append("肯定根拠番号（5 は通常の公開経路 web の route だけ）")
+        for k in STOP_JOKEN:
+            v = joken.get(k)
+            if not isinstance(v, str) or not v.strip() or GAITOU_NASHI.match(v):
+                nai.append("STOP条件の確認：%s（確かめた中身を書く）" % k)
+    # 商品用の継続観測にしてよいか（正本 3.4a）。「可」でなければ本番の継続観測をしない
+    kahi = card.get("商品用継続観測の可否")
+    if kahi == "外す":
+        nai.append("商品用の継続観測から外した取得元（事実データそのものの DB 化・商用利用の禁止が明示）")
+    elif kahi != "可":
+        nai.append("商品用継続観測の可否が読めない（取得可否確認・構造確認までにとどめる）")
     riyuu = card.get("判定理由") or ""
     if not riyuu.strip() or GAITOU_NASHI.match(riyuu):
         nai.append("判定理由（「該当文言なし」だけでは足りない）")
@@ -232,7 +373,7 @@ def _kaketeiru(card):
         nai.append("source種別")
     if card.get("個人情報を含みうる") not in KOJIN:
         nai.append("個人情報を含みうる")
-    # 個人情報・個票の取得前ゲート（民間公開Web v3 §6）。**未決なら取得を始めない。**
+    # 個人情報・個票の取得前ゲート（正本 3.1・3.4a）。**未決なら取得を始めない。**
     # 「含みうるか」の欄は はい／いいえ／分からない（分からないは、はいとして扱う）。
     # 保存・公開の予定と粒度は、中身を書いてあること（未確認・未決・分からない は未決）
     for k in KOJIN_GATE_SANCHI:
@@ -242,8 +383,9 @@ def _kaketeiru(card):
         v = str(card.get(k) or "").strip()
         if not v or v in MIKETSU:
             nai.append("%s（未決）" % k)
-    if card.get("不確定事項") not in ("なし",):
-        nai.append("不確定事項が「なし」でない")
+    # **取得を止める**不確定事項が無いこと。商品化の側の未確認は「商品化の未確認事項」で持ち、ここでは見ない
+    if card.get("不確定事項") not in FUKAKUTEI_NASHI:
+        nai.append("取得を止める不確定事項が残っている（不確定事項が「なし」でない）")
     return nai
 
 
@@ -270,6 +412,121 @@ def seishiki_jotai(card, shounin_yoi):
     if _kaketeiru(card):
         return "規約未確定"
     return "取ってよい"
+
+
+# ------------------------------------------------------------------ 出どころ（route provenance）
+def _jikoku(s):
+    """時差つきの ISO 8601 を epoch 秒に。読めない・時差が無いものは None（推し量らない）。
+    出どころの observed_at を見る（4つの置き場の共通の部分。取得可否確認の部分には頼らない）。"""
+    try:
+        t = datetime.datetime.fromisoformat(str(s))
+    except ValueError:
+        return None
+    return t.timestamp() if t.tzinfo is not None else None
+
+
+def demoto(cid, card, observed_at, source_url="", recorder_role=""):
+    """観測の記録に付ける出どころ（正本 3.4a）。カードに route が無ければ ValueError。
+
+    route_id はカードの id（1 route＝1カード）。**出どころの分からない1つの値に混ぜない**ために、
+    観測の記録は1件ずつこれを持つ。
+    """
+    if not isinstance(card, dict):
+        raise ValueError("カードが無い（%s）" % cid)
+    route, sid = card.get("route種別"), str(card.get("source_id") or "")
+    if route not in ROUTE or not ROUTE_ID.match(sid) or not ROUTE_ID.match(str(cid or "")):
+        raise ValueError("カード %s に route種別・source_id が無い（出どころを書けない）" % cid)
+    if _jikoku(observed_at) is None:
+        raise ValueError("observed_at が日時でない（時差まで書く）：%s" % observed_at)
+    d = {"source_id": sid, "route_id": cid, "route_kind": route, "observed_at": observed_at}
+    if source_url:
+        d["source_url"] = source_url
+    if route == "manual":
+        if not (recorder_role or "").strip() or not (source_url or "").startswith("http"):
+            raise ValueError("manual の観測は、記録者の役割と見た URL が要る")
+        d["recorder_role"] = recorder_role
+    return d
+
+
+def demoto_tarinai(rec):
+    """観測の記録の出どころで、**欠けている・形の違う**欄の並び（空ならそろっている）。
+
+    保存の境界（kansoku_hozon・manual_kiroku）で使う。**demoto() で作ったことを前提にしない**（監査 B-01）：
+    source_id・route_id は英小文字・数字・-、route_kind は4つのどれか、observed_at は時差つきの ISO 8601、
+    source_url は（あれば。manual は必ず）http(s) の URL、manual の recorder_role は空でない文字列。
+    """
+    d = rec.get("demoto") if isinstance(rec, dict) else None
+    if not isinstance(d, dict):
+        return ["demoto"]
+    nai = [k for k in ("source_id", "route_id") if not (isinstance(d.get(k), str) and ROUTE_ID.match(d[k]))]
+    kind = d.get("route_kind")
+    if not (isinstance(kind, str) and kind in ROUTE):
+        nai.append("route_kind")
+    if not (isinstance(d.get("observed_at"), str) and _jikoku(d["observed_at"]) is not None):
+        nai.append("observed_at")
+    if ("source_url" in d or kind == "manual") and _url_host(d.get("source_url")) is None:
+        nai.append("source_url")
+    if kind == "manual" and not (isinstance(d.get("recorder_role"), str) and d["recorder_role"].strip()):
+        nai.append("recorder_role")
+    return nai
+
+
+def _manual_hindo(rireki, cid, aite, hindo, today):
+    """manual の頻度（正本 3.4a。監査 B-02）。止める理由の並び（空ならよい）。
+
+    **同じ相手は、route をまたいで1日1回まで**（日本時間の同じ日。初めのきつい側の既定値）。そのうえで、その route は
+    カードの頻度まで。**前の記録からの日数で数える**（rolling window。統括判断 2026-09-30）：
+    1日1回＝同じ日に1回、週1回＝前の記録から7日未満なら止める、月1回＝前の記録から30日未満なら止める、
+    月2回＝直近30日未満に2件あれば止める。**暦の週・月の境目ではリセットしない**（相手への負荷を抑える線で、
+    集計の週・月ではない。月末→月初、日曜→月曜だけで続けて記録できないようにする）。
+    **manual-rireki.json に今日より後の日が1件でもあれば、相手・route を問わず止める**（台帳そのものの時刻の
+    整合・破損を疑う条件。特定の相手の頻度の問題ではない。統括判断 2026-09-30）。
+    """
+    t = _hi(today)
+    riyuu = []
+    if t is None:
+        return ["今日の日付が読めない"]
+    if any(_hi(r["hi"]) > t for r in rireki):
+        riyuu.append("manual の履歴に、今日より後の日の記録がある（相手・route を問わず、台帳の時刻を信じない）")
+    mae = [r for r in rireki if r["aite"] == aite]
+    if any(_hi(r["hi"]) == t for r in mae):
+        riyuu.append("この相手は今日もう manual で記録した（route をまたいで1日1回）")
+    # (回数, 日数)：その route の、今日から数えて「日数」未満の記録が「回数」に達していたら止める
+    waku = {"1日1回": (1, 1), "週1回": (1, 7), "月1回": (1, 30), "月2回": (2, 30)}.get(hindo)
+    if waku is None:
+        return riyuu + ["頻度が読めない（%s）" % hindo]
+    n, hi_su = waku
+    if sum(1 for r in rireki if r["route_id"] == cid and (t - _hi(r["hi"])).days < hi_su) >= n:
+        riyuu.append("この route はカードの頻度（%s：%d日未満に%d回まで）をもう使った" % (hindo, hi_su, n))
+    return riyuu
+
+
+def shouhin_ni_tsukaeru(rows, cards):
+    """商品に使ってよい観測の記録だけを残す。(残す, [(外した記録, 理由)])。
+
+    **出どころで絞る**（正本 3.4a）。出どころが欠けた記録・カードの無い route・商品用の継続観測が
+    「可」でない取得元・契約で商品に使えない route（API・会員など）のものは外す。
+    同じ会社でも route ごとに見る。API の禁止を web へ広げず、web が使えることで API の禁止を無視しない。
+    """
+    nokosu, hazushita = [], []
+    for r in rows:
+        nai = demoto_tarinai(r)
+        if nai:
+            hazushita.append((r, "出どころが欠けている・形が違う（%s）" % "・".join(nai)))
+            continue
+        c = (cards or {}).get(r["demoto"]["route_id"])
+        if not isinstance(c, dict):
+            hazushita.append((r, "route のカードが無い（%s）" % r["demoto"]["route_id"]))
+        elif c.get("route種別") != r["demoto"]["route_kind"]:
+            hazushita.append((r, "記録の route 種別がカードと違う"))
+        elif c.get("商品用継続観測の可否") != "可":
+            hazushita.append((r, "商品用の継続観測が「可」でない取得元"))
+        elif c.get("このrouteのデータを商品に使えるか") != "使える":
+            hazushita.append((r, "この route で取ったものは商品に使えない（%s）"
+                              % (c.get("このrouteのデータを商品に使えるか") or "未確認")))
+        else:
+            nokosu.append(r)
+    return nokosu, hazushita
 
 
 # ------------------------------------------------------------------ robots
@@ -471,7 +728,7 @@ class Kado:
 
     def __init__(self, root, repo, ua, *, ua_tokens=None, today=None, run_id=None,
                  env=None, transport=None, sleep=time.sleep, now=time.time,
-                 robots_hikae=None, yoyaku_michi=YOYAKU_MICHI):
+                 robots_hikae=None, yoyaku_michi=YOYAKU_MICHI, kansoku_demoto=False):
         self.root = root
         self.repo = repo
         self.ua = ua
@@ -499,6 +756,8 @@ class Kado:
         y = self.daicho.get("yoyaku") if isinstance(self.daicho, dict) else None
         self.yoyaku = y if isinstance(y, dict) else None
         self.yoyaku_michi = yoyaku_michi
+        # 観測を出どころつき（Kado.kansoku_hozon）で保存する段か。**そうでない段は本番の取得に入れない**（正本 3.4a）
+        self.kansoku_demoto = kansoku_demoto is True
         self._yoyaku_ari = set()       # この処理で予約を証明できた相手
         self._yoyaku_dame = {}         # 相手 -> 予約できなかった理由（この処理ではもう試さない）
 
@@ -535,6 +794,177 @@ class Kado:
         if why:
             return False, why
         return shounin_hozon(self.root, rel.replace(os.sep, "/"))
+
+    def demoto(self, cid, observed_at, source_url="", recorder_role=""):
+        """このカード（route）で取った観測の記録に付ける出どころ（正本 3.4a）。"""
+        return demoto(cid, self.card(cid), observed_at, source_url, recorder_role)
+
+    def _kansoku_tashikame(self, cid, rows, hozon_saki):
+        """観測を金庫へ書く前の確かめ。止める理由の並び（空ならよい）。**書かない。**"""
+        card = self.card(cid)
+        riyuu = list(self.kinko_preflight(hozon_saki))
+        if not isinstance(card, dict):
+            riyuu.append("カードが無い（%s）" % cid)
+        if not isinstance(rows, list) or not rows:
+            riyuu.append("保存する観測が無い")
+        else:
+            for i, r in enumerate(rows):
+                nai = demoto_tarinai(r)
+                if nai:
+                    riyuu.append("%d件目の出どころが欠けている・形が違う（%s）" % (i + 1, "・".join(nai)))
+                    continue
+                d = r["demoto"]
+                if isinstance(card, dict) and (d["route_id"] != cid or d["route_kind"] != card.get("route種別")
+                                               or d["source_id"] != card.get("source_id")):
+                    riyuu.append("%d件目の出どころが、このカード（route）と合わない" % (i + 1))
+        return riyuu
+
+    def _kansoku_kaku(self, cid, rows, hozon_saki):
+        """観測を金庫へ書く。**出どころが1件でも欠けていれば、1件も書かない**（Tomeru）。書いた場所を返す。
+
+        **書き終えてから名前を付ける**：一時ファイルに全部書いてから、名前のある場所へ hard link する
+        （上書きしない）。途中で止まっても、書きかけの観測が名前のある場所に残らない。
+        """
+        riyuu = self._kansoku_tashikame(cid, rows, hozon_saki)
+        if riyuu:
+            self.kiroku.append((cid, "", "保存しなかった", "／".join(riyuu)))
+            raise Tomeru(riyuu)
+        body = json.dumps({"schema": KANSOKU_SCHEMA, "route_id": cid, "rows": rows},
+                          ensure_ascii=False, indent=1, sort_keys=True) + "\n"
+        atama = "%s_%s" % (self.today, re.sub(r"[^0-9A-Za-z-]", "_", str(self.run_id)))
+        fd, tmp = tempfile.mkstemp(dir=hozon_saki, prefix=".kansoku-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fp:
+                fp.write(body)
+                fp.flush()
+                os.fsync(fp.fileno())
+            for i in range(1, 100):
+                path = os.path.join(hozon_saki, "%s%s.json" % (atama, "" if i == 1 else "-%d" % i))
+                try:
+                    os.link(tmp, path)
+                    return path
+                except FileExistsError:
+                    continue
+            raise OSError("観測の名前が100通り埋まっている")
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    def kansoku_hozon(self, cid, rows, hozon_saki):
+        """**本番の観測を保存する境界**（正本 3.4a）。出どころ（source_id・route_id・route_kind・observed_at、
+        manual は記録者の役割と見た URL）が欠けた観測は保存しない。書いた場所を返す。"""
+        riyuu = []
+        if not self.kansoku_demoto:
+            riyuu.append("この段は観測を出どころつきで保存する形になっていない（kansoku_demoto）")
+        card = self.card(cid)
+        if isinstance(card, dict) and card.get("route種別") == "manual":
+            riyuu.append("manual の観測は Kado.manual_kiroku で保存する")
+        elif self.seishiki(cid) != "取ってよい":
+            riyuu.append("正式状態が「%s」" % self.seishiki(cid))
+        if riyuu:
+            self.kiroku.append((cid, "", "保存しなかった", "／".join(riyuu)))
+            raise Tomeru(riyuu)
+        return self._kansoku_kaku(cid, rows, hozon_saki)
+
+    def manual_mon(self, cid):
+        """manual の route で、人が見て記録してよいか。**止める理由の並び**（空ならよい）。
+
+        機械の取得の門（card_mon・sesshon）とは別の入口。**robots は見ない**（robots の拒否は機械の route を
+        止めるもの）。カードの manual の欄・運営者承認（カード版・指紋）・再確認期限・機械札・相手台帳を見る。
+        """
+        card = self.card(cid)
+        if card is None:
+            return ["カードが無い（未確認）"]
+        if card.get("route種別") != "manual":
+            return ["manual の route のカードではない"]
+        if self.today is None:
+            return ["今日の日付が渡されていない"]
+        riyuu = []
+        jotai = self.seishiki(cid)
+        if jotai != "取ってよい":
+            why = "、".join(_kaketeiru(card)) if card.get("統括判定案") == "取ってよい" and self.shounin(cid)[0] else ""
+            riyuu.append("正式状態が「%s」%s" % (jotai, ("（%s）" % why) if why else ""))
+        kigen = _hi(card.get("再確認期限"))
+        if kigen is not None and _hi(self.today) > kigen:
+            riyuu.append("再確認期限（%s）を過ぎた" % kigen)
+        f, fr = self.fuda(cid)
+        if f != "なし":
+            riyuu.append("機械札「%s」%s" % (f, ("（%s）" % fr) if fr else ""))
+        a = ((self.daicho or {}).get("aite") or {}).get(card.get("相手") or "") if isinstance(self.daicho, dict) else None
+        if a is None:
+            riyuu.append("相手台帳に相手（%s）が無い" % (card.get("相手") or "空"))
+        elif a.get("担当") != self.repo:
+            riyuu.append("この相手の担当は「%s」（ここは %s）" % (a.get("担当") or "未定", self.repo))
+        return riyuu
+
+    def manual_kiroku(self, cid, rows, observed_at, source_url, recorder_role, hozon_saki):
+        """manual の観測を記録する（人が普通のブラウザで見た事実だけ）。書いた場所を返す。**止めるなら Tomeru。**
+
+        1回の件数は、カードの記録件数上限まで。同じ相手は route をまたいで1日1回まで、その route はカードの頻度まで
+        （履歴は data/ref/manual-rireki.json）。見た URL の host は、カードの対象host の並びのどれかと完全に一致するときだけ。
+
+        **保存の順は、先に履歴、あとで観測。** 観測を書いたあと・履歴を書く前に止まると、観測だけ残って履歴が無く、
+        次の記録を誤って通す。先に履歴を書けば、そのあとで止まっても「履歴だけ残る」（多めに数える＝止まる側）。
+        書く前の確かめ（金庫・出どころ）は、履歴を書く前に全部すませる。
+        """
+        riyuu = self.manual_mon(cid)
+        card = self.card(cid) or {}
+        # manual_mon（正式状態）に頼らず、ここでも形を見直す（監査 B-03）
+        hosts = taisho_host(card)
+        if hosts is None:
+            riyuu.append("カードの対象host が hostname の並びでない")
+        elif not (isinstance(source_url, str) and source_url.startswith("https://")
+                  and _url_host(source_url) in hosts):
+            riyuu.append("見た URL がカードの対象host の外（%s）" % source_url)
+        n = card.get("記録件数上限")
+        if not isinstance(rows, list) or not rows:
+            riyuu.append("記録する事実が無い")
+        elif not (type(n) is int and n >= 1):
+            riyuu.append("カードの記録件数上限が読めない")
+        elif len(rows) > n:
+            riyuu.append("記録件数上限（%d）を超えた（%d）" % (n, len(rows)))
+        aite = card.get("相手")
+        rireki, why = self._manual_rireki()
+        if why:
+            riyuu.append(why)
+        elif not (isinstance(aite, str) and aite):
+            riyuu.append("カードに相手が無い")
+        else:
+            riyuu += _manual_hindo(rireki, cid, aite, card.get("頻度"), self.today)
+        if not riyuu:
+            try:
+                d = demoto(cid, card, observed_at, source_url, recorder_role)
+            except ValueError as e:
+                riyuu.append(str(e))
+        if not riyuu:
+            rows_d = [dict(r, demoto=d) for r in rows]
+            riyuu += self._kansoku_tashikame(cid, rows_d, hozon_saki)
+        if riyuu:
+            self.kiroku.append((cid, "", "記録しなかった", "／".join(riyuu)))
+            raise Tomeru(riyuu)
+        rireki.append({"hi": self.today, "aite": aite, "route_id": cid, "run": self.run_id, "repo": self.repo})
+        _kaku(self._p(MANUAL_RIREKI), {"schema": MANUAL_RIREKI_SCHEMA, "kiroku": rireki})
+        return self._kansoku_kaku(cid, rows_d, hozon_saki)
+
+    def _manual_rireki(self):
+        """manual の履歴の並びと、読めないときの理由。**読めない・形が違うなら止める側**（数え方を信じない）。
+
+        1行ずつ、保存した形のとおりかを全部見る（独立再監査 2026-09-30）：hi＝YYYY-MM-DD で実在する日、
+        aite・run・repo＝空白だけでない文字列、route_id＝ROUTE_ID の形（末尾の改行・道すじ・大文字は不可）。
+        **形の違う行が1件でもあれば、履歴の全部を信じない**（頻度の数えに進まない）。
+        """
+        d = _yomu(self._p(MANUAL_RIREKI), {"schema": MANUAL_RIREKI_SCHEMA, "kiroku": []})
+        if not isinstance(d, dict) or d.get("schema") != MANUAL_RIREKI_SCHEMA or not isinstance(d.get("kiroku"), list):
+            return None, "manual の履歴（%s）が読めない" % MANUAL_RIREKI
+        for r in d["kiroku"]:
+            if not (isinstance(r, dict) and isinstance(r.get("hi"), str)
+                    and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", r["hi"]) and _hi(r["hi"]) is not None
+                    and all(isinstance(r.get(k), str) and r[k].strip() for k in ("aite", "run", "repo"))
+                    and isinstance(r.get("route_id"), str) and ROUTE_ID.match(r["route_id"])):
+                return None, "manual の履歴に形の違う行がある（%s）" % MANUAL_RIREKI
+        return list(d["kiroku"]), ""
 
     def seishiki(self, cid):
         card = self.card(cid)
@@ -632,6 +1062,8 @@ class Kado:
             return ["カードの置き場が壊れている"]
         if card is None:
             return ["カードが無い（未確認）"]
+        if card.get("route種別") == "manual":
+            return ["manual の route は機械の取得に使わない（人の観測は Kado.manual_kiroku）"]
         riyuu = []
         if self.today is None:
             return ["今日の日付が渡されていない（RUN_DATE・hajimeru の today）。日付が要る関所を確かめられない"]
@@ -668,7 +1100,7 @@ class Kado:
         else:
             if a.get("担当") != self.repo:
                 riyuu.append("この相手の担当は「%s」（ここは %s）" % (a.get("担当") or "未定", self.repo))
-            hosts = card.get("対象host") or []
+            hosts = taisho_host(card) or []
             soto = [h for h in hosts if h not in (a.get("host") or [])]
             if soto or not hosts:
                 riyuu.append("カードの対象hostが、相手台帳のその相手に無い")
@@ -695,6 +1127,12 @@ class Kado:
     @contextlib.contextmanager
     def sesshon(self, cid, koui=KOUI_TORU, hozon_saki=None):
         """このカードで取りに行く間だけ、通信を許す。**門で止まったら Tomeru。**"""
+        if not self.kansoku_demoto:
+            # **出どころの無い観測を、本番へ新しく保存させない**（正本 3.4a）。観測を Kado.kansoku_hozon で
+            # 保存する段（hajimeru(..., kansoku_demoto=True)）だけが、本番の取得に入れる
+            riyuu = ["この段は観測を出どころつきで保存する形になっていない（kansoku_hozon を使う段だけが本番の取得に入れる）"]
+            self.kiroku.append((cid, "", "止めた", riyuu[0]))
+            raise Tomeru(riyuu)
         riyuu = self.card_mon(cid, koui, hozon_saki)
         if riyuu:
             self.kiroku.append((cid, "", "止めた", "／".join(riyuu)))
@@ -1048,7 +1486,7 @@ class Kado:
                 raise Tomeru("この URL の host（%s）は、カードの相手のものではない" % host)
             if a.get("担当") != self.repo:
                 raise Tomeru("この相手の担当ではない")
-            if host not in (card.get("対象host") or []):
+            if host not in (taisho_host(card) or []):
                 raise Tomeru("カードの対象hostに無い（%s）" % host)
             han = (card.get("承認する取得方法") or {}).get("URL範囲") or []
             if not any(isinstance(p, str) and p and url.startswith(p) for p in han):

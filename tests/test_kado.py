@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 import urllib.response
@@ -92,6 +93,9 @@ def yoi_card(**kae):
         "統括判定案": "取ってよい", "判定理由": "利用条件が複製・加工・商用を明示的に許している",
         "肯定根拠番号": "1", "不確定事項": "なし", "専門家確認": "不要",
         "再確認期限": "2026-12-31", "再確認理由": "年1回の規約改定に合わせる",
+        # 正本 3.4a（2026-09-29）：route と出どころ・商品用の継続観測の可否
+        "route種別": "web", "source_id": "tameshi-ken", "商品用継続観測の可否": "可",
+        "このrouteのデータを商品に使えるか": "使える",
         "カード版": 1,
     }
     c.update(kae)
@@ -153,6 +157,7 @@ class Oki(unittest.TestCase):
         git(self.root, "commit", "-q", "-m", msg, env=env)
 
     def mon(self, kotae=None, **kw):
+        kw.setdefault("kansoku_demoto", True)
         self.nise = Nise(kotae if kotae is not None else {
             "https://%s/robots.txt" % HOST: ROBOTS_OK, URL: HONBUN})
         self.naps = []
@@ -247,7 +252,7 @@ class 規約の門(Oki):
         self.assertFalse(self.mon().shounin("tameshi")[0])
 
     def test_個人情報と個票の取得前ゲートが未決なら取ってよいにならない(self):
-        """民間公開Web v3 §6。9つのどれかが未決なら、取得を始めない。"""
+        """正本 3.1・3.4a。9つのどれかが未決なら、取得を始めない。"""
         kaketa = {"当事者に個人がありうる": "", "氏名を含みうる": "未確認",
                   "個人の電話番号を含みうる": None, "個人の生活住所を含みうる": "たぶん無い",
                   "個票の粒度": "未確認", "所在地の扱い": "", "privateに保存する予定": "未決",
@@ -261,7 +266,7 @@ class 規約の門(Oki):
         self.assertEqual(kado.seishiki_jotai(yoi_card(氏名を含みうる="分からない"), True), "取ってよい")
 
     def test_肯定根拠4は行政と準公的だけ(self):
-        """4（行政等の公式な再利用条件）は民間には使えない（民間公開Web v3 §3 は3つに閉じている）。"""
+        """4（行政等の公式な再利用条件）は民間には使えない（正本 3.4a）。"""
         for sh in ("民間一次", "二次・集約"):
             with self.subTest(sh=sh):
                 self.assertEqual(kado.seishiki_jotai(
@@ -272,7 +277,9 @@ class 規約の門(Oki):
         for n in ("1", "2", "3"):
             self.assertEqual(kado.seishiki_jotai(
                 yoi_card(肯定根拠番号=n, **{"source種別": "民間一次"}), True), "取ってよい")
+        # 5 は STOP 条件を確かめた記録が無ければ取ってよいにならない（正本 3.4a。下の検査）
         self.assertEqual(kado.seishiki_jotai(yoi_card(肯定根拠番号="5"), True), "規約未確定")
+        self.assertEqual(kado.seishiki_jotai(yoi_card(肯定根拠番号="6"), True), "規約未確定")
 
     def test_該当文言なしだけでは取ってよいにならない(self):
         self.cards["tameshi"] = yoi_card(判定理由="該当文言なし")
@@ -725,7 +732,7 @@ class robotsのバイト(Oki):
         hikae = os.path.join(self.kinko, "raw", "_robots")
         self.nise = Nise({"https://%s/robots.txt" % HOST: (200, {"Content-Type": "text/plain"}, 生),
                           URL: HONBUN})
-        k = kado.Kado(self.root, REPO, UA, env=self.env, transport=self.nise, run_id="run-h",
+        k = kado.Kado(self.root, REPO, UA, kansoku_demoto=True, env=self.env, transport=self.nise, run_id="run-h",
                       sleep=lambda s: None, now=lambda: ASA + 1000.0, robots_hikae=hikae)
         k.install()
         with k.sesshon("tameshi", hozon_saki=os.path.join(self.kinko, "raw")):
@@ -739,7 +746,7 @@ class robotsのバイト(Oki):
     def test_控えの置き場が金庫の外なら書かない(self):
         self.shounin()
         soto = os.path.join(self.root, "data", "raw", "_robots")
-        k = kado.Kado(self.root, REPO, UA, env=self.env, transport=Nise({
+        k = kado.Kado(self.root, REPO, UA, kansoku_demoto=True, env=self.env, transport=Nise({
             "https://%s/robots.txt" % HOST: ROBOTS_OK, URL: HONBUN}), run_id="run-s",
             sleep=lambda s: None, now=lambda: ASA + 1000.0, robots_hikae=soto)
         k.install()
@@ -956,7 +963,7 @@ class 日付の関所(Oki):
         tokei = [jikoku("2026-09-25", "23:59:50")]    # robots.txt → 5秒 → 本体 → 5秒 → 0時
         u2 = "https://%s/data/two.html" % HOST
         nise = Nise({"https://%s/robots.txt" % HOST: ROBOTS_OK, URL: HONBUN, u2: HONBUN})
-        k = kado.Kado(self.root, REPO, UA, env=self.env, transport=nise, run_id="run-1",
+        k = kado.Kado(self.root, REPO, UA, kansoku_demoto=True, env=self.env, transport=nise, run_id="run-1",
                       now=lambda: tokei[0],
                       sleep=lambda n: tokei.__setitem__(0, tokei[0] + n))
         self.nise = nise
@@ -1494,6 +1501,669 @@ class import_しただけで閉じる(unittest.TestCase):
         urllib.request.install_opener(urllib.request.build_opener(kado._Tozasu()))
         with self.assertRaises(kado.Tomeru):
             urllib.request.urlopen("https://example.invalid/", timeout=1)
+
+
+def konkyo5_card(**kae):
+    """根拠5（公開された事実・数値の、通常の公開経路からの観測）の、そろったカード。"""
+    c = yoi_card(**{
+        "source種別": "民間一次", "肯定根拠番号": "5",
+        "判定理由": "店名・価格・日時などの事実を、ログイン不要の一覧から GET で観測する。"
+                    "STOP 条件のどれにも当たらないことを、規約と robots で確かめた",
+        "重要な原文": "「当サイトの文章・画像の無断転載を禁じます」（利用規約 第5条）",
+        "STOP条件の確認": {
+            "robots": "当たらない：/robots.txt は対象の道すじを拒否していない（2026-09-29 に確認）",
+            "アクセス制御": "当たらない：ログイン・同意画面・CAPTCHA なしで一覧が開ける",
+            "明示的なbot禁止": "当たらない：規約・ヘルプを読み、bot・crawler・自動取得の名指しの禁止が無かった",
+            "相手からの回答": "当たらない：問い合わせたことが無い（止める回答を受けていない）",
+            "拒否状態": "当たらない：確認のとき 401・403・429・503 は返っていない",
+            "負荷": "当たらない：同時1本・5秒以上・同じ相手に1日1回",
+            "同意済みの契約": "当たらない：会員・API の同意をしていない（web の route だけ）",
+            "個人情報": "当たらない：個人情報・個票の欄はすべて決めてある（カードの欄）",
+            "二次・集約": "当たらない：相手自身の一次の掲載",
+            "想定外": "当たらない：規約・robots・運営主体・転送先・取得方法に変わりが無い",
+        },
+    })
+    c.update(kae)
+    return c
+
+
+class 公開情報の取得と事実データの利用(Oki):
+    """正本 3.4a（2026-09-29）。**明示の許可が書いていないことは、それだけでは止める理由にしない。**
+    そのかわり、STOP 条件を全部確かめた記録と、運営者承認と、門のほかの条件が要る。"""
+
+    def test_根拠5は_条件がそろって運営者が承認すれば門を通る(self):
+        self.cards["tameshi"] = konkyo5_card()
+        self.kaku_all()
+        self.shounin()
+        k = self.mon()
+        self.assertEqual(k.seishiki("tameshi"), "取ってよい", kado._kaketeiru(self.cards["tameshi"]))
+        self.assertEqual(self.toru(k), b"<html>ok</html>")
+
+    def test_運営者承認が無ければ_根拠5でも通らない(self):
+        self.cards["tameshi"] = konkyo5_card()
+        self.kaku_all()
+        k = self.mon()
+        self.assertEqual(k.seishiki("tameshi"), "規約未確定")
+        with self.assertRaises(kado.Tomeru):
+            self.toru(k)
+        self.assertEqual(self.nise.kita, [])
+
+    def test_該当文言なしだけでは_根拠5でも取ってよいにならない(self):
+        self.assertEqual(kado.seishiki_jotai(konkyo5_card(判定理由="該当文言なし"), True), "規約未確定")
+        j = dict(konkyo5_card()["STOP条件の確認"], 明示的なbot禁止="該当文言なし")
+        self.assertEqual(kado.seishiki_jotai(konkyo5_card(**{"STOP条件の確認": j}), True), "規約未確定")
+
+    def test_STOP条件の確認が1つでも欠ければ根拠5にならない(self):
+        for k in kado.STOP_JOKEN:
+            with self.subTest(k=k):
+                j = dict(konkyo5_card()["STOP条件の確認"])
+                del j[k]
+                c = konkyo5_card(**{"STOP条件の確認": j})
+                self.assertIn(k, "、".join(kado._kaketeiru(c)))
+                self.assertEqual(kado.seishiki_jotai(c, True), "規約未確定")
+
+    def test_明示的なbot禁止はSTOP_どの根拠でも(self):
+        j = dict(konkyo5_card()["STOP条件の確認"],
+                 明示的なbot禁止="当たる：利用規約 第7条「ロボット・クローラーによる自動取得を禁止します」")
+        for n in ("5", "1"):
+            with self.subTest(n=n):
+                self.assertEqual(kado.seishiki_jotai(
+                    konkyo5_card(肯定根拠番号=n, **{"STOP条件の確認": j}), True), "規約未確定")
+
+    def test_robotsの拒否はSTOP_カードに書いても_相手のrobotsでも(self):
+        j = dict(konkyo5_card()["STOP条件の確認"], robots="当たる：/robots.txt が対象の道すじを Disallow")
+        self.assertEqual(kado.seishiki_jotai(konkyo5_card(**{"STOP条件の確認": j}), True), "規約未確定")
+        # カードでは「当たらない」でも、相手の robots が拒めば、門は通信を出さない
+        self.cards["tameshi"] = konkyo5_card()
+        self.kaku_all()
+        self.shounin()
+        k = self.mon({"https://%s/robots.txt" % HOST: (200, {"Content-Type": "text/plain"},
+                                                        b"User-agent: *\nDisallow: /data/\n"),
+                      URL: HONBUN})
+        with self.assertRaises(kado.Tomeru):
+            self.toru(k)
+        self.assertNotIn(URL, self.nise.kita)
+
+    def test_根拠5は通常の公開経路webのrouteだけ(self):
+        for r in ("api", "member"):
+            with self.subTest(r=r):
+                self.assertEqual(kado.seishiki_jotai(konkyo5_card(route種別=r), True), "規約未確定")
+
+    def test_商品化の未確認だけでは_取得の門を落とさない(self):
+        c = konkyo5_card(商品化の未確認事項="どの欄を商品に出すか、画面の設計が未決")
+        self.assertEqual(kado.seishiki_jotai(c, True), "取ってよい")
+        self.assertEqual(kado.seishiki_jotai(konkyo5_card(不確定事項="取得を止める不確定事項なし"), True),
+                         "取ってよい")
+
+    def test_取得を止める不確定事項が残っていれば通らない(self):
+        self.assertEqual(kado.seishiki_jotai(konkyo5_card(不確定事項="規約の改定待ち"), True), "規約未確定")
+
+    def test_長期の商品用sourceか読めなければ本番に進まない(self):
+        for v in ("読めない", "外す", "", None):
+            with self.subTest(v=v):
+                self.assertEqual(kado.seishiki_jotai(
+                    konkyo5_card(商品用継続観測の可否=v), True), "規約未確定")
+
+    def test_routeと出どころが無ければ取ってよいにならない(self):
+        for kae in ({"route種別": ""}, {"route種別": "ftp"}, {"source_id": ""}, {"source_id": "日本語"},
+                    {"route種別": "manual"}):
+            with self.subTest(kae=kae):
+                self.assertEqual(kado.seishiki_jotai(konkyo5_card(**kae), True), "規約未確定")
+                # 根拠5 に限らない（根拠1 のカードでも route と出どころが要る）
+                self.assertEqual(kado.seishiki_jotai(yoi_card(**kae), True), "規約未確定")
+
+    def test_観測の記録は出どころを持つ(self):
+        d = kado.demoto("tameshi", konkyo5_card(), "2026-09-29T07:00:00+09:00", URL)
+        self.assertEqual(d, {"source_id": "tameshi-ken", "route_id": "tameshi", "route_kind": "web",
+                             "observed_at": "2026-09-29T07:00:00+09:00", "source_url": URL})
+        with self.assertRaises(ValueError):
+            kado.demoto("tameshi", konkyo5_card(route種別=""), "2026-09-29T07:00:00+09:00")
+        with self.assertRaises(ValueError):
+            kado.demoto("tameshi", konkyo5_card(), "2026-09-29")        # 時刻・時差が無い
+        # manual は記録者の役割と見た URL が要る
+        m = konkyo5_card(route種別="manual")
+        with self.assertRaises(ValueError):
+            kado.demoto("tameshi-m", m, "2026-09-29T07:00:00+09:00")
+        d = kado.demoto("tameshi-m", m, "2026-09-29T07:00:00+09:00", URL, recorder_role="運営者")
+        self.assertEqual(d["recorder_role"], "運営者")
+        self.assertEqual(kado.demoto_tarinai({"demoto": d}), [])
+        self.assertIn("recorder_role", kado.demoto_tarinai(
+            {"demoto": {k: v for k, v in d.items() if k != "recorder_role"}}))
+
+    def test_API由来の使えない記録を_商品へ混ぜない(self):
+        cards = {"tameshi": konkyo5_card(),
+                 "tameshi-api": konkyo5_card(route種別="api", 肯定根拠番号="3",
+                                             このrouteのデータを商品に使えるか="使えない")}
+        t = "2026-09-29T07:00:00+09:00"
+        web = {"price": 100, "demoto": kado.demoto("tameshi", cards["tameshi"], t)}
+        api = {"price": 100, "demoto": kado.demoto("tameshi-api", cards["tameshi-api"], t)}
+        nashi = {"price": 100}
+        nokosu, hazushita = kado.shouhin_ni_tsukaeru([web, api, nashi], cards)
+        self.assertEqual(nokosu, [web])
+        self.assertEqual([r for r, _ in hazushita], [api, nashi])
+        self.assertIn("商品に使えない", hazushita[0][1])
+        self.assertIn("出どころ", hazushita[1][1])
+        # 取得元が「外す」なら、web の route でも商品に使わない
+        cards["tameshi"] = konkyo5_card(商品用継続観測の可否="外す")
+        self.assertEqual(kado.shouhin_ni_tsukaeru([web], cards)[0], [])
+
+
+T_MIRU = "2026-09-25T07:00:00+09:00"
+
+
+def manual_card(**kae):
+    """manual の route（人が普通のブラウザで見て、事実だけを書く）の、そろったカード。"""
+    c = yoi_card(**{
+        "route種別": "manual", "source_id": "tameshi-ken", "肯定根拠番号": "",
+        "人の通常閲覧": "できる", "アクセス制御": "なし",
+        "manual観測を禁じる文言・回答": "なし：規約と相手の回答（ロボット不可だけ）を読み、人の閲覧や記録の禁止は無かった",
+        "記録件数上限": 3, "頻度": "1日1回",
+    })
+    c.update(kae)
+    return c
+
+
+class manualの承認経路(Oki):
+    """正本 3.4a。manual は機械の取得の門（sesshon）を通らないが、**門が無いのではない。**
+    カードの manual の欄と、運営者承認（カード版・指紋）がそろったときだけ、人の観測を記録できる。"""
+
+    def setUp(self):
+        super().setUp()
+        self.cards["tameshi-m"] = manual_card()
+        self.kaku_all()
+        self.saki = os.path.join(self.kinko, "manual")
+
+    def kiroku(self, k, rows=None, url=URL):
+        return k.manual_kiroku("tameshi-m", rows if rows is not None else [{"price": 100}],
+                               T_MIRU, url, "運営者", self.saki)
+
+    def test_承認と欄がそろえば記録できる_robotsは見ない_通信もしない(self):
+        self.shounin("tameshi-m")
+        # robots が全部を拒んでいても、manual の拒否ではない（robots は機械への指示）
+        k = self.mon({"https://%s/robots.txt" % HOST: (200, {"Content-Type": "text/plain"},
+                                                        b"User-agent: *\nDisallow: /\n")})
+        self.assertEqual(k.manual_mon("tameshi-m"), [])
+        path = self.kiroku(k)
+        d = json.load(open(path, encoding="utf-8"))
+        self.assertEqual(d["rows"][0]["demoto"]["route_kind"], "manual")
+        self.assertEqual(d["rows"][0]["demoto"]["recorder_role"], "運営者")
+        self.assertEqual(self.nise.kita, [])
+
+    def test_運営者承認が無ければ記録できない(self):
+        k = self.mon()
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku(k)
+        self.assertEqual(os.listdir(self.kinko), [])
+
+    def test_manualの欄が1つでも欠ければ取ってよいにならない(self):
+        for kae in ({"source_id": ""}, {"対象URL": ""}, {"人の通常閲覧": "分からない"}, {"アクセス制御": ""},
+                    {"manual観測を禁じる文言・回答": "該当文言なし"}, {"manual観測を禁じる文言・回答": "なし："},
+                    {"記録件数上限": 0}, {"記録件数上限": "3"}, {"頻度": "1日3回"}, {"商品用継続観測の可否": "読めない"},
+                    {"氏名を含みうる": ""}, {"再確認期限": ""}):
+            with self.subTest(kae=kae):
+                self.assertEqual(kado.seishiki_jotai(manual_card(**kae), True), "規約未確定")
+        self.assertEqual(kado.seishiki_jotai(manual_card(), True), "取ってよい")
+
+    def test_人にもアクセス制御が出るならmanualにしない(self):
+        for v in ("CAPTCHA あり", "ログインが要る", "403"):
+            with self.subTest(v=v):
+                self.assertEqual(kado.seishiki_jotai(manual_card(アクセス制御=v), True), "規約未確定")
+
+    def test_件数の上限と_同じrouteは1日1回(self):
+        self.shounin("tameshi-m")
+        k = self.mon()
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku(k, rows=[{"price": i} for i in range(4)])      # 上限3を超える
+        self.kiroku(k)
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku(self.mon(run_id="run-2"))                         # 同じ日の2回目
+
+    def test_見たURLが対象の外なら記録しない(self):
+        self.shounin("tameshi-m")
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku(self.mon(), url="https://www.example.com/x")
+
+    def test_manualのカードで機械の取得はしない(self):
+        self.shounin("tameshi-m")
+        k = self.mon()
+        with self.assertRaises(kado.Tomeru):
+            self.toru(k, cid="tameshi-m")
+        self.assertEqual(self.nise.kita, [])
+
+
+    # ---- 監査 B-02：頻度は、同じ相手（route をまたぐ）とカードの頻度で数える
+    def kiroku_hi(self, hi, cid="tameshi-m", run=None):
+        k = self.mon(today=hi, run_id=run or "run-" + hi)
+        return k.manual_kiroku(cid, [{"price": 100}], "%sT10:00:00+09:00" % hi, URL, "運営者", self.saki)
+
+    def hindo(self, v):
+        self.cards["tameshi-m"] = manual_card(頻度=v)
+        self.kaku_all()
+        self.shounin("tameshi-m")
+
+    def test_同じ相手は_別のrouteでも同じ日に2回記録しない(self):
+        self.cards["tameshi-m2"] = manual_card()          # 同じ相手・別の route
+        self.kaku_all()
+        self.shounin("tameshi-m")
+        self.shounin("tameshi-m2")
+        self.kiroku_hi("2026-09-25")
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku_hi("2026-09-25", cid="tameshi-m2", run="run-x")
+        self.kiroku_hi("2026-09-26", cid="tameshi-m2")    # 次の日なら、別の route は記録できる
+
+    # 週・月は、前の記録からの日数で数える（rolling window。暦の境目ではリセットしない。統括判断 2026-09-30）
+    def test_週1回は_日曜から月曜でも7日未満なら止める(self):
+        self.hindo("週1回")
+        self.kiroku_hi("2026-09-27")                      # 日曜
+        for hi in ("2026-09-28", "2026-10-03"):           # 次の日の月曜（暦の週は変わる）・6日後
+            with self.subTest(hi=hi):
+                with self.assertRaises(kado.Tomeru):
+                    self.kiroku_hi(hi)
+        self.kiroku_hi("2026-10-04")                      # 7日後
+
+    def test_週1回は_6日差なら止め_7日差なら通す(self):
+        self.hindo("週1回")
+        self.kiroku_hi("2026-09-24")
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku_hi("2026-09-30")                  # 9/24 → 9/30 は6日
+        self.kiroku_hi("2026-10-01")                      # 7日
+
+    def test_週1回は_7日差なら通る(self):
+        self.hindo("週1回")
+        self.kiroku_hi("2026-09-23")
+        self.kiroku_hi("2026-09-30")                      # 9/23 → 9/30 は7日
+
+    def test_月1回は_月末から月初でも30日未満なら止める(self):
+        self.hindo("月1回")
+        self.kiroku_hi("2026-09-30")
+        for hi in ("2026-10-01", "2026-10-29"):           # 暦の月は変わる・29日後
+            with self.subTest(hi=hi):
+                with self.assertRaises(kado.Tomeru):
+                    self.kiroku_hi(hi)
+
+    def test_月1回は_30日差なら通る(self):
+        self.hindo("月1回")
+        self.kiroku_hi("2026-09-30")
+        self.kiroku_hi("2026-10-30")                      # 30日後
+
+    def test_月2回は_月をまたいでも直近30日に2件あれば3件目を止める(self):
+        self.hindo("月2回")
+        self.kiroku_hi("2026-09-25")
+        self.kiroku_hi("2026-10-02")
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku_hi("2026-10-05")                  # 月は変わったが、直近30日に2件
+
+    def test_月2回は_30日の窓から古い記録が外れたら通る(self):
+        self.hindo("月2回")
+        self.kiroku_hi("2026-09-01")
+        self.kiroku_hi("2026-09-10")
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku_hi("2026-09-20")
+        self.kiroku_hi("2026-10-01")                      # 9/1 は30日前で窓の外。窓の中は 9/10 の1件
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku_hi("2026-10-02")                  # 窓の中に 9/10・10/1 の2件
+        self.kiroku_hi("2026-10-10")                      # 9/10 が外れて、窓の中は 10/1 の1件
+
+    def test_頻度を数える履歴が残る_読めなければ止める(self):
+        self.shounin("tameshi-m")
+        self.kiroku_hi("2026-09-25")
+        d = json.load(open(self.p("data", "ref", "manual-rireki.json"), encoding="utf-8"))
+        self.assertEqual([(r["hi"], r["aite"], r["route_id"]) for r in d["kiroku"]],
+                         [("2026-09-25", "ためし県", "tameshi-m")])
+        for kowareta in ("{", "[]", json.dumps({"schema": 1, "kiroku": [{"hi": "きのう", "aite": "ためし県",
+                                                                          "route_id": "tameshi-m"}]}),
+                         json.dumps({"schema": 1, "kiroku": [{"hi": "2026-12-01", "aite": "ためし県",
+                                                              "route_id": "tameshi-m"}]})):   # 今日より後
+            with self.subTest(kowareta=kowareta[:30]):
+                with open(self.p("data", "ref", "manual-rireki.json"), "w", encoding="utf-8") as f:
+                    f.write(kowareta)
+                with self.assertRaises(kado.Tomeru):
+                    self.kiroku_hi("2026-10-05")
+
+    def rireki_kaku(self, *kiroku):
+        with open(self.p("data", "ref", "manual-rireki.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema": 1, "kiroku": [{"hi": hi, "aite": aite, "route_id": rid, "run": "run-x", "repo": REPO}
+                                               for hi, aite, rid in kiroku]}, f, ensure_ascii=False)
+
+    def test_今日より後の記録が1件でもあれば_相手もrouteも問わず止める(self):
+        """manual-rireki.json は manual の頻度の判定全体の台帳。先の日は台帳そのものの時刻・破損を疑う条件。"""
+        self.shounin("tameshi-m")
+        for kiroku in ((("2026-12-01", "ためし県", "tameshi-m2"),),      # 同じ相手・別の route
+                       (("2026-12-01", "ほかの県", "hoka-m"),),           # 別の相手
+                       (("2026-10-04", "ほかの県", "hoka-m"),             # 正しい履歴にまじって1件だけ
+                        ("2026-10-06", "ほかの県", "hoka-m2"))):
+            with self.subTest(kiroku=kiroku):
+                self.rireki_kaku(*kiroku)
+                with self.assertRaises(kado.Tomeru):
+                    self.kiroku_hi("2026-10-05")
+
+    def test_今日より後の記録が無ければ_ほかの相手の履歴は頻度に効かない(self):
+        self.shounin("tameshi-m")
+        self.rireki_kaku(("2026-10-05", "ほかの県", "hoka-m"),                # 今日・別の相手
+                         ("2026-10-04", "ほかの県", "hoka-m2"),
+                         ("2026-09-20", "ほかの県", "hoka-m"))
+        self.kiroku_hi("2026-10-05")
+        d = json.load(open(self.p("data", "ref", "manual-rireki.json"), encoding="utf-8"))
+        self.assertEqual(len(d["kiroku"]), 4)                               # 前の履歴は消さずに追記
+
+    # ---- 独立再監査：manual-rireki の行は、保存した形のとおりかを全部見る
+    def test_履歴の行の形が1つでも違えば止める(self):
+        self.shounin("tameshi-m")
+        yoi = {"hi": "2026-10-01", "aite": "ほかの県", "route_id": "hoka-m", "run": "run-x", "repo": REPO}
+        for kae in ({"route_id": "tameshi-m\n"}, {"route_id": "../tameshi-m"}, {"route_id": "data/ref/tameshi-m"},
+                    {"route_id": "Tameshi-M"}, {"route_id": 1},
+                    {"run": None}, {"run": "  "}, {"run": 1}, {"repo": None}, {"repo": " "},
+                    {"aite": "  "}, {"aite": None},
+                    {"hi": "2026-02-30"}, {"hi": "2026-9-01"}, {"hi": "2026-10-01T00:00"}):
+            with self.subTest(kae=kae):
+                r = {k: v for k, v in dict(yoi, **kae).items() if v is not None}
+                with open(self.p("data", "ref", "manual-rireki.json"), "w", encoding="utf-8") as f:
+                    json.dump({"schema": 1, "kiroku": [yoi, r]}, f, ensure_ascii=False)
+                with self.assertRaises(kado.Tomeru) as cm:
+                    self.kiroku_hi("2026-10-05")
+                self.assertIn("形の違う行", str(cm.exception))
+        # 形のそろった行だけなら通る（止まったのは形のせい）
+        self.rireki_kaku(("2026-10-01", "ほかの県", "hoka-m"))
+        self.kiroku_hi("2026-10-05")
+
+    def test_壊れたroute_idの履歴で頻度をすり抜けられない(self):
+        """前の記録の route_id が "tameshi-m\\n" だと、形を見ない数え方では、その記録がこの route に数えられない。"""
+        for hindo, mae, ima in (("週1回", ["2026-09-25"], "2026-09-26"),
+                                ("月1回", ["2026-09-25"], "2026-10-05"),
+                                ("月2回", ["2026-09-20", "2026-09-25"], "2026-10-05")):
+            with self.subTest(hindo=hindo):
+                self.hindo(hindo)
+                with open(self.p("data", "ref", "manual-rireki.json"), "w", encoding="utf-8") as f:
+                    json.dump({"schema": 1, "kiroku": [{"hi": hi, "aite": "ためし県", "route_id": "tameshi-m\n",
+                                                        "run": "run-" + hi, "repo": REPO} for hi in mae]},
+                              f, ensure_ascii=False)
+                with self.assertRaises(kado.Tomeru) as cm:
+                    self.kiroku_hi(ima)
+                self.assertIn("形の違う行", str(cm.exception))
+                self.assertFalse(os.path.exists(self.saki) and os.listdir(self.saki))
+
+    # ---- 独立再監査：URL に user・password（userinfo）があれば、host が正しくても通さない
+    def test_userinfoつきのURLは_正しい対象hostでも通さない(self):
+        for url in ("https://user@%s/data/list.html" % HOST, "https://user:pass@%s/data/list.html" % HOST,
+                    "https://:pass@%s/data/list.html" % HOST, "https://@%s/data/list.html" % HOST):
+            with self.subTest(url=url):
+                # 共通の入口
+                self.assertIsNone(kado._url_host(url))
+                # manual のカードの対象URL（対象host は正しい [HOST]）
+                self.assertEqual(kado.seishiki_jotai(manual_card(対象URL=url), True), "規約未確定")
+                # 出どころ（manual も web も）
+                m = {"source_id": "tameshi-ken", "route_id": "tameshi-m", "route_kind": "manual",
+                     "observed_at": T_MIRU, "source_url": url, "recorder_role": "運営者"}
+                self.assertIn("source_url", kado.demoto_tarinai({"demoto": m}))
+                self.assertIn("source_url", kado.demoto_tarinai({"demoto": dict(m, route_kind="web", route_id="tameshi")}))
+        # manual_kiroku の source_url（カードも承認も正しい。userinfo だけが理由で止まる）
+        self.shounin("tameshi-m")
+        for i, url in enumerate(("https://user@%s/data/list.html" % HOST, "https://user:pass@%s/data/list.html" % HOST)):
+            with self.subTest(url=url):
+                with self.assertRaises(kado.Tomeru):
+                    self.kiroku(self.mon(run_id="run-u%d" % i), url=url)
+        self.assertFalse(os.path.exists(self.saki) and os.listdir(self.saki))
+        self.kiroku(self.mon(run_id="run-ok"), url=URL)                     # userinfo を外せば通る
+
+    # ---- Production Readiness：manual の保存の順（先に履歴、あとで観測）
+    def kansoku_no_kazu(self):
+        if not os.path.isdir(self.saki):
+            return 0
+        return len([f for f in os.listdir(self.saki) if f.endswith(".json")])
+
+    def rireki_no_kazu(self):
+        pth = self.p("data", "ref", "manual-rireki.json")
+        return len(json.load(open(pth, encoding="utf-8"))["kiroku"]) if os.path.exists(pth) else 0
+
+    def test_保存の順_履歴を書けなければ観測も書かない_観測だけ残らない(self):
+        self.shounin("tameshi-m")
+        with mock.patch.object(kado, "_kaku", side_effect=OSError("履歴を書けない")):
+            with self.assertRaises(OSError):
+                self.kiroku_hi("2026-10-05")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (0, 0))
+        # 再実行：何も残っていないので、同じ日にもう一度記録できる（二重にはならない）
+        self.kiroku_hi("2026-10-05")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (1, 1))
+
+    def test_保存の順_観測を書けなければ履歴だけ残り_止まる側に数える(self):
+        self.shounin("tameshi-m")
+        with mock.patch.object(kado.os, "link", side_effect=OSError("観測を書けない")):
+            with self.assertRaises(OSError):
+                self.kiroku_hi("2026-10-05")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (0, 1))
+        self.assertEqual([f for f in os.listdir(self.saki) if f.startswith(".kansoku-")], [])   # 書きかけも残さない
+        # 再実行：同じ日は、履歴だけ残った1件で止まる。履歴は二重にならない
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku_hi("2026-10-05", run="run-again")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (0, 1))
+        # 次の日（1日1回）は通る
+        self.kiroku_hi("2026-10-06")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (1, 2))
+
+    def test_保存の順_観測を書いている途中で止まっても_書きかけの観測は残らない(self):
+        self.shounin("tameshi-m")
+        with mock.patch.object(kado.os, "fsync", side_effect=OSError("書いている途中で止まった")):
+            with self.assertRaises(OSError):
+                self.kiroku_hi("2026-10-05")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (0, 1))
+        self.assertEqual(os.listdir(self.saki), [])                        # 名前のある観測も一時ファイルも無い
+        with self.assertRaises(kado.Tomeru):                              # 同じ日の再試行は止まる
+            self.kiroku_hi("2026-10-05", run="run-again")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (0, 1))
+
+    def test_保存の順_hard_linkのできない置き場では観測を保存しない(self):
+        self.shounin("tameshi-m")
+        with mock.patch.object(kado.os, "link", side_effect=PermissionError("この置き場は hard link できない")):
+            with self.assertRaises(OSError):
+                self.kiroku_hi("2026-10-05")
+        self.assertEqual(os.listdir(self.saki), [])
+        self.assertEqual(self.rireki_no_kazu(), 1)                         # 止まる側に数える
+
+    def test_保存の順_書く前の確かめで止まるなら履歴も書かない(self):
+        self.shounin("tameshi-m")
+        k = self.mon(today="2026-10-05", run_id="run-x")
+        with self.assertRaises(kado.Tomeru):                              # 金庫の外
+            k.manual_kiroku("tameshi-m", [{"price": 1}], "2026-10-05T10:00:00+09:00", URL, "運営者",
+                            self.p("data", "manual"))
+        self.assertEqual(self.rireki_no_kazu(), 0)
+        self.kiroku_hi("2026-10-05")                                        # 止まった分は数えない
+
+    def test_保存の順_成功した記録は二重にならない(self):
+        self.shounin("tameshi-m")
+        self.kiroku_hi("2026-10-05")
+        with self.assertRaises(kado.Tomeru):
+            self.kiroku_hi("2026-10-05", run="run-again")
+        self.assertEqual((self.kansoku_no_kazu(), self.rireki_no_kazu()), (1, 1))
+
+    # ---- 監査 B-03：対象host は hostname の並び。照合は完全一致だけ
+    def test_対象hostが文字列1本や形の違う並びなら正式状態にならない(self):
+        for v in (HOST, "not-" + HOST, [], [""], [1], ["https://%s/" % HOST], ["%s/data" % HOST],
+                  [HOST.upper()], [HOST + " "], [HOST + "."]):
+            with self.subTest(v=v):
+                self.assertEqual(kado.seishiki_jotai(manual_card(対象host=v), True), "規約未確定")
+                # 機械の route でも同じ（同じ形の穴）
+                self.assertEqual(kado.seishiki_jotai(yoi_card(対象host=v), True), "規約未確定")
+        # 対象URL の host が並びに無いのも manual にしない
+        self.assertEqual(kado.seishiki_jotai(manual_card(対象host=["hoka.example.jp"]), True), "規約未確定")
+
+    def test_hostの部分一致では通さない(self):
+        self.shounin("tameshi-m")
+        k = self.mon()
+        for url in ("https://x%s/a" % HOST, "https://%s.evil.example/a" % HOST, "https://%s/a" % HOST[4:],
+                    "http://%s/a" % HOST, "https://user@%s.evil.example/a" % HOST):
+            with self.subTest(url=url):
+                with self.assertRaises(kado.Tomeru):
+                    self.kiroku(k, url=url)
+        # 監査で再現した形：対象host が文字列 "not-<host>"、見た URL が <host>。
+        # 正式状態（manual_mon）を通ったことにしても、manual_kiroku が自分で形を見直して止める
+        self.cards["tameshi-s"] = manual_card(対象host="not-" + HOST)
+        self.kaku_all()
+        self.shounin("tameshi-s")
+        k = self.mon(run_id="run-s")
+        k.manual_mon = lambda cid: []
+        with self.assertRaises(kado.Tomeru):
+            k.manual_kiroku("tameshi-s", [{"price": 1}], T_MIRU, URL, "運営者", self.saki)
+        self.assertFalse(os.path.exists(self.saki) and os.listdir(self.saki))
+
+    def test_正しい並びの完全一致だけ通る(self):
+        self.cards["tameshi-m"] = manual_card(対象host=["hoka.example.jp", HOST])
+        self.kaku_all()
+        self.shounin("tameshi-m")
+        path = self.kiroku(self.mon(), url="https://%s/data/x.html" % HOST.upper())   # URL の host は小文字にそろえて見る
+        d = json.load(open(path, encoding="utf-8"))
+        self.assertEqual(d["rows"][0]["demoto"]["route_id"], "tameshi-m")
+
+
+class 本番の保存の境界(Oki):
+    """正本 3.4a。**出どころ（source_id・route_id・route_kind・observed_at）の無い観測を、本番へ新しく保存させない。**
+    観測を Kado.kansoku_hozon で保存する段だけが本番の取得に入れ、保存の境界で出どころを確かめる。"""
+
+    def setUp(self):
+        super().setUp()
+        self.cards["tameshi"] = konkyo5_card()
+        self.kaku_all()
+        self.shounin()
+        self.saki = os.path.join(self.kinko, "kansoku")
+
+    def test_出どころつきで保存する段でなければ_本番の取得に入れない(self):
+        k = self.mon(kansoku_demoto=False)
+        with self.assertRaises(kado.Tomeru):
+            self.toru(k)
+        self.assertEqual(self.nise.kita, [])
+
+    def test_出どころの無い観測は保存しない(self):
+        k = self.mon()
+        with self.assertRaises(kado.Tomeru):
+            k.kansoku_hozon("tameshi", [{"price": 1}], self.saki)
+        d = dict(k.demoto("tameshi", T_MIRU))
+        del d["observed_at"]
+        with self.assertRaises(kado.Tomeru):
+            k.kansoku_hozon("tameshi", [{"price": 1, "demoto": d}], self.saki)
+        self.assertFalse(os.path.exists(self.saki) and os.listdir(self.saki))
+
+    def test_1件でも欠けていれば_1件も保存しない(self):
+        k = self.mon()
+        ok = {"price": 1, "demoto": k.demoto("tameshi", T_MIRU)}
+        with self.assertRaises(kado.Tomeru):
+            k.kansoku_hozon("tameshi", [ok, {"price": 2}], self.saki)
+        self.assertFalse(os.path.exists(self.saki) and os.listdir(self.saki))
+
+    def test_ほかのrouteの出どころは保存しない(self):
+        self.cards["tameshi-api"] = konkyo5_card(route種別="api", 肯定根拠番号="3")
+        self.kaku_all()
+        k = self.mon()
+        with self.assertRaises(kado.Tomeru):
+            k.kansoku_hozon("tameshi", [{"price": 1, "demoto": k.demoto("tameshi-api", T_MIRU)}], self.saki)
+
+    def test_出どころつきなら金庫へ保存できる(self):
+        k = self.mon()
+        path = k.kansoku_hozon("tameshi", [{"price": 1, "demoto": k.demoto("tameshi", T_MIRU, URL)}], self.saki)
+        d = json.load(open(path, encoding="utf-8"))
+        self.assertEqual(d["rows"][0]["demoto"]["route_id"], "tameshi")
+        self.assertEqual(d["rows"][0]["demoto"]["source_url"], URL)
+
+    def test_金庫の外と_宣言の無い段と_承認の無いカードには保存しない(self):
+        k = self.mon()
+        row = {"price": 1, "demoto": k.demoto("tameshi", T_MIRU)}
+        with self.assertRaises(kado.Tomeru):
+            k.kansoku_hozon("tameshi", [row], self.p("data", "kansoku"))              # 金庫の外
+        with self.assertRaises(kado.Tomeru):
+            self.mon(kansoku_demoto=False).kansoku_hozon("tameshi", [row], self.saki)
+        os.remove(self.p("data", "ref", "shounin", "tameshi.json"))
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "承認を消す")
+        with self.assertRaises(kado.Tomeru):
+            self.mon().kansoku_hozon("tameshi", [row], self.saki)
+
+    # ---- 監査 B-01：保存の境界が、出どころの中身まで自分で見直す（demoto() を通したことを前提にしない）
+    def test_壊れたobserved_atは保存の境界で止める(self):
+        k = self.mon()
+        for v in ("NOT-A-DATE", "2026-09-29", "2026-09-29T07:00:00", "", " ", 20260929, None):
+            with self.subTest(v=v):
+                d = dict(k.demoto("tameshi", T_MIRU), observed_at=v)
+                with self.assertRaises(kado.Tomeru):
+                    k.kansoku_hozon("tameshi", [{"price": 1, "demoto": d}], self.saki)
+        self.assertFalse(os.path.exists(self.saki) and os.listdir(self.saki))
+
+    def test_source_id_route_id_route_kindの形と整合を保存の境界で見る(self):
+        k = self.mon()
+        moto = k.demoto("tameshi", T_MIRU, URL)
+        for kae in ({"source_id": "Tameshi Ken"}, {"source_id": "tameshi-ken\n"}, {"source_id": 1},
+                    {"source_id": "hoka-ken"},                       # 形は正しいが、カードと違う
+                    {"route_id": "../tameshi"}, {"route_id": "tameshi\n"}, {"route_id": ["tameshi"]},
+                    {"route_id": "tameshi-2"},                       # 形は正しいが、保存する route と違う
+                    {"route_kind": "ftp"}, {"route_kind": "WEB"}, {"route_kind": ["web"]},
+                    {"route_kind": "api"},                           # 形は正しいが、カードと違う
+                    {"source_url": "not-a-url"}, {"source_url": "ftp://%s/x" % HOST}, {"source_url": ""}):
+            with self.subTest(kae=kae):
+                with self.assertRaises(kado.Tomeru):
+                    k.kansoku_hozon("tameshi", [{"price": 1, "demoto": dict(moto, **kae)}], self.saki)
+        self.assertFalse(os.path.exists(self.saki) and os.listdir(self.saki))
+        # 壊していない行は保存できる（止まったのは中身のせい）
+        self.assertTrue(k.kansoku_hozon("tameshi", [{"price": 1, "demoto": moto}], self.saki))
+
+    def test_出どころの形は_カードと照らさなくても見る(self):
+        """保存の境界の demoto_tarinai は、カードと照らす前に、形の違いを自分で返す（商品へ絞る側も同じ関数）。"""
+        moto = {"source_id": "tameshi-ken", "route_id": "tameshi", "route_kind": "web", "observed_at": T_MIRU}
+        self.assertEqual(kado.demoto_tarinai({"demoto": moto}), [])
+        for kae, ke in (({"source_id": "Tameshi Ken"}, "source_id"), ({"source_id": "tameshi-ken\n"}, "source_id"),
+                        ({"source_id": 1}, "source_id"), ({"route_id": "../tameshi"}, "route_id"),
+                        ({"route_id": "tameshi\n"}, "route_id"), ({"route_id": ["tameshi"]}, "route_id"),
+                        ({"route_kind": "ftp"}, "route_kind"), ({"route_kind": "WEB"}, "route_kind"),
+                        ({"route_kind": ["web"]}, "route_kind")):
+            with self.subTest(kae=kae):
+                self.assertIn(ke, kado.demoto_tarinai({"demoto": dict(moto, **kae)}))
+        # カードの source_id も、末尾の改行を通さない
+        self.assertEqual(kado.seishiki_jotai(yoi_card(source_id="tameshi-ken\n"), True), "規約未確定")
+
+    def test_manualの出どころも中身まで見る(self):
+        m = {"source_id": "tameshi-ken", "route_id": "tameshi-m", "route_kind": "manual",
+             "observed_at": T_MIRU, "source_url": URL, "recorder_role": "運営者"}
+        self.assertEqual(kado.demoto_tarinai({"demoto": m}), [])
+        for kae, ke in (({"recorder_role": "  "}, "recorder_role"), ({"recorder_role": 1}, "recorder_role"),
+                        ({"source_url": None}, "source_url"), ({"source_url": "example.com/x"}, "source_url"),
+                        ({"observed_at": "NOT-A-DATE"}, "observed_at")):
+            with self.subTest(kae=kae):
+                self.assertIn(ke, kado.demoto_tarinai({"demoto": dict(m, **kae)}))
+
+    def test_機械の観測も_書いている途中で止まれば何も残らない(self):
+        k = self.mon()
+        row = {"price": 1, "demoto": k.demoto("tameshi", T_MIRU)}
+        for err in (mock.patch.object(kado.os, "fsync", side_effect=OSError("書いている途中で止まった")),
+                    mock.patch.object(kado.os, "link", side_effect=PermissionError("hard link できない"))):
+            with self.subTest(err=err.attribute):
+                with err:
+                    with self.assertRaises(OSError):
+                        k.kansoku_hozon("tameshi", [row], self.saki)
+                self.assertEqual(os.listdir(self.saki), [])
+
+    def test_観測は書き終えてから名前を付ける(self):
+        """名前を付けるところで止まっても、名前のある観測も、書きかけの一時ファイルも残らない。"""
+        k = self.mon()
+        row = {"price": 1, "demoto": k.demoto("tameshi", T_MIRU)}
+        with mock.patch.object(kado.os, "link", side_effect=OSError("名前を付けられない")):
+            with self.assertRaises(OSError):
+                k.kansoku_hozon("tameshi", [row], self.saki)
+        self.assertEqual(os.listdir(self.saki), [])
+        path = k.kansoku_hozon("tameshi", [row], self.saki)
+        self.assertEqual(os.listdir(self.saki), [os.path.basename(path)])
+        self.assertEqual(json.load(open(path, encoding="utf-8"))["rows"], [row])
+
+    def test_出どころつきで保存すると名乗った段は_kansoku_hozonを呼ぶ(self):
+        """置き場の .py を歩いて見る（名前の一覧で決め打ちしない）。検査と common は外す。"""
+        ne = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        mita, warui = 0, []
+        for d0, dirs, files in os.walk(ne):
+            dirs[:] = [d for d in dirs if not d.startswith((".", "_")) and d not in ("tests", "common", "data")]
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                mita += 1
+                t = open(os.path.join(d0, f), encoding="utf-8", errors="replace").read()
+                if "kansoku_demoto=True" in t and ".kansoku_hozon(" not in t:
+                    warui.append(os.path.relpath(os.path.join(d0, f), ne))
+        self.assertGreater(mita, 0, "置き場の .py を1本も見ていない（拾い方が壊れている）")
+        self.assertEqual(warui, [], "出どころつきで保存すると名乗ったのに、kansoku_hozon を呼んでいない")
 
 
 if __name__ == "__main__":
