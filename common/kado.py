@@ -86,6 +86,12 @@ ROUTE = ("web", "api", "member", "manual", "public_form_post")
 METHOD_ROUTE = {"web": ("GET",), "api": ("GET",), "member": ("GET",), "public_form_post": ("GET", "POST")}
 # public_form_post の POST に付けない見出し（Cookie に頼らない・認証を使わない・参照元を偽らない）
 POST_KINSHI_MIDASHI = ("Cookie", "Authorization", "Proxy-Authorization", "Referer")
+# どの route・メソッドでも、取得段が付けない見出し（Cookie に頼らない・Authorization を使わない・
+# 接続先（Host）を差し替えない。正本 3.4a）。GET の Referer は、カードの対象host のページだけ（偽らない）
+KINSHI_MIDASHI = ("Cookie", "Cookie2", "Authorization", "Proxy-Authorization", "Host")
+# public_form_post の POST に、取得段が付けてよい見出し（**許す一覧**。これ以外は止める）
+POST_YURUSU_MIDASHI = ("Content-Type", "User-Agent")
+POST_CONTENT_TYPE = "application/x-www-form-urlencoded"
 ROUTE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,80}\Z")
 # 商品用の継続観測にしてよいか（正本 3.4a）。「可」でなければ本番の継続観測をしない
 #   外す      事実・数値・データそのものの DB 化・蓄積・収集・商用利用の禁止が明示されている
@@ -234,6 +240,10 @@ def shounin_hozon(root, relpath):
         return False, "承認ファイルが保存（commit）されていない"
     if _git(root, "diff", "--quiet", "HEAD", "--", relpath).returncode != 0:
         return False, "承認ファイルが、保存したあとで書き換えられている"
+    # 取り込み先の main があるとき（手順書の checkout）、承認は main に入っているものだけ（別の branch の承認を使わない）
+    if _git(root, "rev-parse", "--verify", "-q", "refs/remotes/origin/main").returncode == 0:
+        if _git(root, "diff", "--quiet", "refs/remotes/origin/main", "HEAD", "--", relpath).returncode != 0:
+            return False, "承認ファイルが、取り込み先の main と違う（main に入っていない承認は使わない）"
     return True, ""
 
 
@@ -299,7 +309,7 @@ def koukai_form(card):
     if not (isinstance(act, str) and act.startswith("https://") and _url_host(act) in hosts):
         return None
     han = (card.get("承認する取得方法") or {}).get("URL範囲") or []
-    if not any(isinstance(x, str) and x and act.startswith(x) for x in han):
+    if not any(han_ni_hairu(act, x) for x in han):
         return None
     if not (isinstance(vals, dict) and vals
             and all(isinstance(k, str) and k.strip() and isinstance(v, str) for k, v in vals.items())):
@@ -307,6 +317,33 @@ def koukai_form(card):
     if not (isinstance(page, str) and _url_host(page) in hosts) or _hi(f.get("見た日")) is None:
         return None
     return f
+
+
+def han_ni_hairu(url, p):
+    """URL が、承認された URL範囲の1本 p に入るか（正本 3.4a）。**前方一致にしない**。
+
+      p が「/」で終わる → scheme・host・port が同じで、道すじが p の道すじで始まる（その道すじの下）
+      p に「?」がある → 道すじと問い合わせ（query）まで完全一致（?id=21424 は ?id=214240 に当たらない）
+      それ以外       → 道すじの完全一致（問い合わせの付いた URL は入れない）
+    URL・p のどちらかが http(s) でない・userinfo がある・\\ や %2e %2f %5c（. / \\ をくるんだもの）を含むなら入れない。
+    """
+    def wake(x):
+        if not isinstance(x, str) or not x or "\\" in x or re.search(r"%(2e|2f|5c)", x, re.I) or _url_host(x) is None:
+            return None
+        u = urllib.parse.urlsplit(x)
+        try:
+            port = u.port
+        except ValueError:
+            return None
+        return u.scheme, u.hostname, port, u.path or "/", u.query
+    a, b = wake(url), wake(p)
+    if a is None or b is None or a[:3] != b[:3]:
+        return False
+    if b[4] or "?" in p:
+        return a[3] == b[3] and a[4] == b[4]
+    if b[3].endswith("/"):
+        return a[3].startswith(b[3])
+    return a[3] == b[3] and not a[4]
 
 
 def form_nakami(f):
@@ -867,7 +904,13 @@ class Kado:
         if card is None:
             return False, "カードが無い"
         rel = os.path.join(SHOUNIN, "%s.json" % cid)
-        s = _yomu(self._p(rel), {})
+        path = self._p(rel)
+        oya = os.path.normcase(os.path.normpath(os.path.join(os.path.realpath(self.root), SHOUNIN)))
+        if os.path.lexists(path) and (os.path.islink(path)
+                                      or os.path.normcase(os.path.realpath(os.path.dirname(path))) != oya
+                                      or os.path.normcase(os.path.realpath(path)) != os.path.normcase(os.path.join(oya, "%s.json" % cid))):
+            return False, "承認ファイルが symlink か、承認の置き場（%s）の外を指している" % SHOUNIN
+        s = _yomu(path, {})
         if not s:
             return False, "運営者承認が無い"
         if s.get("運営者承認") != "承認":
@@ -880,6 +923,8 @@ class Kado:
             return False, "承認時のカード指紋が、いまのカードと違う（承認のあとでカードが変わった）"
         if not _hi(s.get("承認日")):
             return False, "承認日が無い"
+        if _hi(self.today) and _hi(s.get("承認日")) > _hi(self.today):
+            return False, "承認日（%s）が今日より後" % s.get("承認日")
         why = shounin_sha(s)
         if why:
             return False, why
@@ -1099,7 +1144,10 @@ class Kado:
         """今日の控えを書く。前の観測日の分は `mae` に1つだけ残す（混雑が続いたかを見るため）。"""
         path = self._p(KYOU)
         with self._lock:
-            d = _yomu(path, {}) or {}
+            d = _yomu(path, {})
+            if not isinstance(d, dict):
+                # 壊れた控えを、新しい控えで上書きしない（前の記録が消える）。確かめられないので止める
+                raise Tomeru("今日の控え（%s）が壊れている。上書きしない" % KYOU)
             e = d.get(aite) or {}
             if e.get("hi") != self.today or e.get("run") != self.run_id:
                 e = {"mae": {"hi": e.get("hi"), "tomatta": e.get("tomatta", "")}} if e.get("hi") else {}
@@ -1242,7 +1290,10 @@ class Kado:
                 riyuu.append("カードの対象hostが、相手台帳のその相手に無い")
                 if jotai == "取ってよい":
                     self.fuda_wo_tsukeru(cid, "不整合", "対象hostが相手台帳と合わない")
-            e = (self._kyou_yomu() or {}).get(aite) or {}
+            kyou = self._kyou_yomu()
+            if not isinstance(kyou, dict):
+                riyuu.append("今日の控え（%s）が壊れている。同じ相手へ1日1回を確かめられない" % KYOU)
+            e = (kyou if isinstance(kyou, dict) else {}).get(aite) or {}
             if e.get("hi") == self.today and e.get("run") != self.run_id:
                 riyuu.append("この相手は今日もう見た（%s）" % e.get("repo", ""))
             if e.get("hi") == self.today and e.get("tomatta"):
@@ -1633,11 +1684,14 @@ class Kado:
             if host not in (taisho_host(card) or []):
                 raise Tomeru("カードの対象hostに無い（%s）" % host)
             han = (card.get("承認する取得方法") or {}).get("URL範囲") or []
-            if not any(isinstance(p, str) and p and url.startswith(p) for p in han):
+            if not any(han_ni_hairu(url, p) for p in han):
                 raise Tomeru("承認された URL範囲の外")
             if aite in self._tomatta:
                 raise Tomeru("この回、この相手は「%s」で止めた" % self._tomatta[aite])
-            e = (self._kyou_yomu() or {}).get(aite) or {}
+            kyou = self._kyou_yomu()
+            if not isinstance(kyou, dict):
+                raise Tomeru("今日の控え（%s）が壊れている。同じ相手へ1日1回を確かめられない" % KYOU)
+            e = kyou.get(aite) or {}
             if e.get("hi") == self.today and (e.get("run") != self.run_id or e.get("tomatta")):
                 raise Tomeru("この相手は今日もう見た、または止めた")
             jotai, rules, delay, why = self._robots_toru(u.scheme, host, aite)
@@ -1664,20 +1718,38 @@ class Kado:
         route = card.get("route種別")
         m = req.get_method()
         riyuu = []
+        if (type(req).get_method is not urllib.request.Request.get_method
+                or type(req).data is not urllib.request.Request.data):
+            # 確かめたあとで、送るときのメソッド・中身が変わりうる
+            riyuu.append("get_method・data を差し替えた Request は出さない")
+        midashi = {}
+        for h, v in list(req.headers.items()) + list(req.unredirected_hdrs.items()):
+            midashi[h.lower()] = v
+        kinshi = [h for h in KINSHI_MIDASHI if h.lower() in midashi]
+        if kinshi:
+            riyuu.append("%s の見出しを付けない（Cookie・認証に頼らない・接続先を差し替えない）" % "・".join(kinshi))
+        if m != "POST" and "referer" in midashi and _url_host(str(midashi["referer"])) not in (taisho_host(card) or []):
+            riyuu.append("Referer がカードの対象hostのページでない（Referer を偽らない）")
         if m not in METHOD_ROUTE.get(route, ()):
             riyuu.append("route「%s」では HTTP %s を出さない" % (route or "空", m))
         elif m == "POST":
             f = koukai_form(card)
-            midashi = {h.lower() for h in list(req.headers) + list(req.unredirected_hdrs)}
             if f is None:
                 riyuu.append("カードの公開form の形が違う")
             elif req.full_url != f["action"]:
                 riyuu.append("POST の宛先がカードの action と違う")
             elif not isinstance(req.data, bytes) or req.data != form_nakami(f):
                 riyuu.append("POST の中身がカードの送る値と違う")
-            kinshi = [h for h in POST_KINSHI_MIDASHI if h.lower() in midashi]
+            kinshi = [h for h in POST_KINSHI_MIDASHI if h.lower() in midashi and h not in KINSHI_MIDASHI]
             if kinshi:
                 riyuu.append("POST に %s の見出しを付けない" % "・".join(kinshi))
+            yurusu = {h.lower() for h in POST_YURUSU_MIDASHI + POST_KINSHI_MIDASHI + KINSHI_MIDASHI}
+            hoka = sorted(h for h in midashi if h not in yurusu)
+            if hoka:
+                riyuu.append("POST に付けてよい見出しは %s だけ（%s）" % ("・".join(POST_YURUSU_MIDASHI), "・".join(hoka)))
+            ct = midashi.get("content-type")
+            if ct is not None and str(ct).split(";")[0].strip().lower() != POST_CONTENT_TYPE:
+                riyuu.append("POST の Content-Type が %s でない" % POST_CONTENT_TYPE)
         if riyuu:
             self.kiroku.append((cid, req.full_url, "止めた", "／".join(riyuu)))
             raise Tomeru(riyuu)
@@ -1695,7 +1767,9 @@ class Kado:
                 return req
 
             https_request = http_request
-            ftp_request = http_request       # ftp は http(s) でないので、門で止まる
+            ftp_request = http_request       # ftp・file・data は http(s) でないので、門で止まる
+            file_request = http_request
+            data_request = http_request
 
             def http_response(self, req, resp):
                 code = getattr(resp, "status", None) or resp.getcode()
@@ -1778,6 +1852,26 @@ class _Tozasu(urllib.request.BaseHandler):
 
     https_request = http_request
     ftp_request = http_request
+    file_request = http_request
+    data_request = http_request
+
+
+def _urlopen_wo_shimeru():
+    """urlopen に context・cafile・capath・cadefault を渡すと、既定の opener（門）を使わずに新しい opener を作って
+    外へ出られる。**この形の urlopen を止める**（Q2）。渡さない呼び方は、これまでと同じ動き。"""
+    moto = urllib.request.urlopen
+    if getattr(moto, "_kado_moto", None) is not None:
+        return                                  # もう包んである（読み直しで二重に包まない）
+
+    def urlopen(url, *a, **kw):
+        if len(a) > 2 or any(kw.get(k) not in (None, False) for k in ("context", "cafile", "capath", "cadefault")):
+            raise Tomeru("urlopen に context・cafile・capath を渡さない（門を通らない opener になる）")
+        return urlopen._kado_moto(url, *a, **{k: v for k, v in kw.items() if k in ("data", "timeout")})
+    urlopen._kado_moto = moto
+    urllib.request.urlopen = urlopen
+
+
+_urlopen_wo_shimeru()
 
 
 # **import した時点で、門の無い通信を閉じる。** hajimeru() が門を入れるまで、何も出ない

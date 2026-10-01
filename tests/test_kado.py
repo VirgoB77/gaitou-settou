@@ -2076,6 +2076,200 @@ def manual_card(**kae):
     return c
 
 
+class 独立監査の残り(Oki):
+    """元の独立監査 Q1〜Q10 のうち、統合のあとで残っていたもの（2026-10-01）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.cards["tameshi-f"] = form_card()
+        self.kaku_all()
+
+    def dasu(self, k, cid, req):
+        k.install()
+        with k.sesshon(cid, hozon_saki=os.path.join(self.kinko, "raw")):
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.read()
+
+    # ---- Q1 見出し
+    def test_GETにCookieや認証や接続先の見出しを付けない(self):
+        self.shounin()
+        for h in ("Cookie", "Cookie2", "Authorization", "Proxy-Authorization", "Host"):
+            for kakushi in (False, True):
+                with self.subTest(h=h, unredirected=kakushi):
+                    req = urllib.request.Request(URL)
+                    (req.add_unredirected_header if kakushi else req.add_header)(h, "x=1")
+                    with self.assertRaises(kado.Tomeru) as cm:
+                        self.dasu(self.mon(), "tameshi", req)
+                    self.assertIn("の見出しを付けない", str(cm.exception))
+                    self.assertEqual(self.nise.kita, [])                                # robots.txt も取りに行かない
+
+    def test_GETのRefererは対象hostのページだけ(self):
+        self.shounin()
+        with self.assertRaises(kado.Tomeru) as cm:
+            self.dasu(self.mon(), "tameshi", urllib.request.Request(URL, headers={"Referer": "https://example.com/x"}))
+        self.assertIn("Referer", str(cm.exception))
+        self.assertEqual(self.nise.kita, [])
+        req = urllib.request.Request(URL, headers={"Referer": "https://%s/data/" % HOST, "Accept-Language": "ja"})
+        self.assertEqual(self.dasu(self.mon(), "tameshi", req), b"<html>ok</html>")    # 同じ host のページから来たと言うのはよい
+
+    def test_POSTに付けてよい見出しは許す一覧だけ(self):
+        self.shounin("tameshi-f")
+        data = kado.form_nakami(form_card()["公開form"])
+        for midashi in ({"X-Api-Key": "k"}, {"Origin": "https://%s" % HOST}, {"Cookie2": "a=1"}, {"Host": "evil.example"},
+                        {"Content-Type": "multipart/form-data; boundary=x"}, {"Accept": "*/*"}):
+            with self.subTest(midashi=midashi):
+                k = self.mon({"https://%s/robots.txt" % HOST: ROBOTS_OK, ACTION: XLSX})
+                with self.assertRaises(kado.Tomeru):
+                    self.dasu(k, "tameshi-f", urllib.request.Request(ACTION, data=data, headers=midashi, method="POST"))
+                self.assertEqual(self.nise.kita, [])
+        req = urllib.request.Request(ACTION, data=data, method="POST")
+        req.add_unredirected_header("Cookie", "a=1")                                    # 隠した見出しも見る
+        with self.assertRaises(kado.Tomeru):
+            self.dasu(self.mon({"https://%s/robots.txt" % HOST: ROBOTS_OK, ACTION: XLSX}), "tameshi-f", req)
+        k = self.mon({"https://%s/robots.txt" % HOST: ROBOTS_OK, ACTION: XLSX})
+        req = urllib.request.Request(ACTION, data=data, method="POST",
+                                     headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "x"})
+        self.assertEqual(self.dasu(k, "tameshi-f", req), b"PK\x03\x04tameshi")       # 許す一覧の中ならよい
+
+    # ---- Q2 門の外の道
+    def test_fileやdataのURLも門で止める(self):
+        self.shounin()
+        for url in ("file:///etc/hosts", "data:text/plain,abc"):
+            with self.subTest(url=url):
+                with self.assertRaises(kado.Tomeru):
+                    self.dasu(self.mon(), "tameshi", urllib.request.Request(url))
+                urllib.request.install_opener(urllib.request.build_opener(kado._Tozasu()))    # 門を始める前も
+                with self.assertRaises(kado.Tomeru):
+                    urllib.request.urlopen(url, timeout=1)
+        self.assertEqual(self.nise.kita, [])
+
+    def test_get_methodを差し替えたRequestは出さない(self):
+        self.shounin()
+
+        class Kawaru(urllib.request.Request):
+            n = 0
+
+            def get_method(self):
+                Kawaru.n += 1
+                return "GET" if Kawaru.n == 1 else "POST"
+        with self.assertRaises(kado.Tomeru) as cm:
+            self.dasu(self.mon(), "tameshi", Kawaru(URL))
+        self.assertIn("get_method", str(cm.exception))
+        self.assertEqual(self.nise.kita, [])
+
+    def test_urlopenにcontextやcafileを渡せない(self):
+        import ssl
+        self.shounin()
+        k = self.mon()
+        k.install()
+        for kw in ({"context": ssl.create_default_context()}, {"cafile": "x.pem"}, {"capath": "."}):
+            with self.subTest(kw=sorted(kw)):
+                with k.sesshon("tameshi", hozon_saki=os.path.join(self.kinko, "raw")):
+                    with self.assertRaises(kado.Tomeru):
+                        urllib.request.urlopen(URL, timeout=5, **kw)
+        self.assertEqual(self.nise.kita, [])
+
+    # ---- Q10（と Q2）import しただけで閉じることを、別のプロセスで確かめる
+    def test_importしただけで門の無い通信は出ない_別のプロセス(self):
+        code = ("import sys; sys.path.insert(0, %r)\n"
+                "from common import kado\nimport urllib.request\n"
+                "try:\n    urllib.request.urlopen('https://example.invalid/', timeout=1)\n"
+                "except kado.Tomeru:\n    print('TOMETA')\n" % HERE)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        self.assertIn("TOMETA", r.stdout, r.stderr[-500:])
+
+    # ---- Q5 URL範囲
+    def test_URL範囲は前方一致にしない(self):
+        h = kado.han_ni_hairu
+        a = "https://%s/resource/?id=21424" % HOST
+        self.assertTrue(h(a, a))
+        for url in (a + "0", a + "&x=1", "https://%s/resource/?id=2142" % HOST, "https://%s/resource/" % HOST):
+            with self.subTest(url=url):
+                self.assertFalse(h(url, a))
+        f = "https://%s/data/list.html" % HOST
+        self.assertTrue(h(f, f))
+        for url in (f + "x", f + ".bak", f + "?x=1", f + "/../x", "https://%s/data/list%%2ehtml" % HOST):
+            with self.subTest(url=url):
+                self.assertFalse(h(url, f))
+        d = "https://%s/data/" % HOST
+        self.assertTrue(h("https://%s/data/a/b.csv" % HOST, d))
+        for url in ("https://%s/database/x" % HOST, "https://%s/data\\..\\x" % HOST, "https://%s/data/%%2e%%2e/x" % HOST,
+                    "https://%s/data/%%2fetc" % HOST, "http://%s/data/a" % HOST, "https://%s:8443/data/a" % HOST,
+                    "https://u:p@%s/data/a" % HOST, "https://other.example/data/a"):
+            with self.subTest(url=url):
+                self.assertFalse(h(url, d))
+
+    def test_URL範囲の外は門で止める(self):
+        self.shounin("tameshi-f")                                                        # URL範囲は ?id=21424 の1本
+        with self.assertRaises(kado.Tomeru) as cm:
+            self.dasu(self.mon({"https://%s/robots.txt" % HOST: ROBOTS_OK, ACTION + "0": HONBUN}), "tameshi-f",
+                      urllib.request.Request(ACTION + "0"))                              # ?id=214240
+        self.assertIn("URL範囲の外", str(cm.exception))
+        self.assertNotIn(ACTION + "0", self.nise.kita)
+
+    # ---- Q7 運営者承認
+    def test_承認日が今日より後なら認めない(self):
+        self.shounin(承認日="2026-09-26")                                                # 今日は 2026-09-25
+        ok, why = self.mon().shounin("tameshi")
+        self.assertFalse(ok)
+        self.assertIn("今日より後", why)
+        self.shounin(承認日="2026-09-25")
+        self.assertEqual(self.mon().shounin("tameshi"), (True, ""))
+
+    def test_承認ファイルがsymlinkなら認めない(self):
+        self.shounin()
+        p = self.p("data", "ref", "shounin", "tameshi.json")
+        soto = os.path.join(tempfile.mkdtemp(), "tameshi.json")
+        self.addCleanup(shutil.rmtree, os.path.dirname(soto), True)
+        shutil.copy(p, soto)
+        os.remove(p)
+        try:
+            os.symlink(soto, p)
+        except (OSError, NotImplementedError):
+            self.skipTest("この環境では symlink を作れない")
+        ok, why = self.mon().shounin("tameshi")
+        self.assertFalse(ok)
+        self.assertIn("symlink", why)
+
+    def test_取り込み先のmainと違う承認は使わない(self):
+        self.shounin()
+        moto = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, moto, True)
+        bare = os.path.join(moto, "o.git")
+        git(moto, "init", "-q", "--bare", bare)
+        git(self.root, "remote", "add", "origin", bare)
+        git(self.root, "push", "-q", "origin", "HEAD:refs/heads/main")
+        git(self.root, "fetch", "-q", "origin")
+        self.assertEqual(self.mon().shounin("tameshi"), (True, ""))                      # main と同じ承認
+        self.shounin(承認日="2026-09-23")                                                # 別の branch で承認を書き換えた形
+        ok, why = self.mon().shounin("tameshi")
+        self.assertFalse(ok)
+        self.assertIn("main と違う", why)
+
+    # ---- Q9 今日の控えが壊れていたら
+    def test_今日の控えが壊れていたら止めて上書きもしない(self):
+        self.shounin()
+        kyou = self.p("data", "ref", "aite-kyou.json")
+        with open(kyou, "w", encoding="utf-8") as f:
+            f.write("{こわれた")
+        k = self.mon()
+        self.assertTrue(any("壊れている" in r for r in k.card_mon("tameshi")))
+        with self.assertRaises(kado.Tomeru):
+            self.dasu(k, "tameshi", urllib.request.Request(URL))
+        self.assertEqual(self.nise.kita, [])
+        with open(kyou, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "{こわれた")
+        with self.assertRaises(kado.Tomeru):
+            k._kyou_kaku("ためし県", saigo=1.0)
+
+    # ---- Q3 検査の穴
+    def test_知らないrouteは取ってよいにならない(self):
+        for route in ("xyz", "WEB", " web"):
+            with self.subTest(route=route):
+                self.assertNotEqual(kado.seishiki_jotai(yoi_card(route種別=route), True), "取ってよい")
+                self.assertEqual(kado.METHOD_ROUTE.get(route, ()), ())
+
+
 class manualの承認経路(Oki):
     """正本 3.4a。manual は機械の取得の門（sesshon）を通らないが、**門が無いのではない。**
     カードの manual の欄と、運営者承認（カード版・指紋）がそろったときだけ、人の観測を記録できる。"""
@@ -2152,7 +2346,7 @@ class manualの承認経路(Oki):
     def hindo(self, v):
         self.cards["tameshi-m"] = manual_card(頻度=v)
         self.kaku_all()
-        self.shounin("tameshi-m")
+        self.shounin("tameshi-m", 承認日="2026-08-01")
 
     def test_同じ相手は_別のrouteでも同じ日に2回記録しない(self):
         self.cards["tameshi-m2"] = manual_card()          # 同じ相手・別の route
