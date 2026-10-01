@@ -2199,6 +2199,12 @@ class 独立監査の残り(Oki):
             with self.subTest(url=url):
                 self.assertFalse(h(url, d))
 
+    def test_公開formのactionも前方一致にしない(self):
+        f = form_card()
+        f["公開form"] = dict(f["公開form"], action=ACTION + "0")                         # URL範囲は ?id=21424 の1本
+        self.assertIsNone(kado.koukai_form(f))
+        self.assertIsNotNone(kado.koukai_form(form_card()))
+
     def test_URL範囲の外は門で止める(self):
         self.shounin("tameshi-f")                                                        # URL範囲は ?id=21424 の1本
         with self.assertRaises(kado.Tomeru) as cm:
@@ -2261,6 +2267,16 @@ class 独立監査の残り(Oki):
             self.assertEqual(f.read(), "{こわれた")
         with self.assertRaises(kado.Tomeru):
             k._kyou_kaku("ためし県", saigo=1.0)
+        os.remove(kyou)
+        k = self.mon()
+        k.install()
+        with k.sesshon("tameshi", hozon_saki=os.path.join(self.kinko, "raw")):
+            with open(kyou, "w", encoding="utf-8") as f:
+                f.write("[")                                                            # 取りに行く途中で壊れた
+            with self.assertRaises(kado.Tomeru) as cm:
+                urllib.request.urlopen(URL, timeout=5)
+        self.assertIn("壊れている", str(cm.exception))
+        self.assertEqual(self.nise.kita, [])
 
     # ---- Q3 検査の穴
     def test_知らないrouteは取ってよいにならない(self):
