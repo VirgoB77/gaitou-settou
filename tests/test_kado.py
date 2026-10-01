@@ -2223,16 +2223,33 @@ class 独立監査の残り(Oki):
         self.assertEqual(self.mon().shounin("tameshi"), (True, ""))
 
     def test_承認ファイルがsymlinkなら認めない(self):
+        """承認ファイルそのものが symlink（作れる環境だけ）と、承認の置き場のフォルダが外への symlink・junction の2通り。"""
         self.shounin()
-        p = self.p("data", "ref", "shounin", "tameshi.json")
-        soto = os.path.join(tempfile.mkdtemp(), "tameshi.json")
-        self.addCleanup(shutil.rmtree, os.path.dirname(soto), True)
-        shutil.copy(p, soto)
+        oya = self.p("data", "ref", "shounin")
+        p = os.path.join(oya, "tameshi.json")
+        soto = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, soto, True)
+        shutil.copy(p, os.path.join(soto, "tameshi.json"))
         os.remove(p)
         try:
-            os.symlink(soto, p)
+            os.symlink(os.path.join(soto, "tameshi.json"), p)
         except (OSError, NotImplementedError):
-            self.skipTest("この環境では symlink を作れない")
+            pass                                                                         # Windows：ファイルの symlink は作れない
+        else:
+            ok, why = self.mon().shounin("tameshi")
+            self.assertFalse(ok)
+            self.assertIn("symlink", why)
+            os.remove(p)
+        shutil.rmtree(oya)
+        try:
+            os.symlink(soto, oya, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            try:
+                import _winapi                                                           # Windows：junction は作れる
+                _winapi.CreateJunction(soto, oya)
+            except (ImportError, OSError):
+                self.skipTest("この環境では symlink も junction も作れない")
+        self.addCleanup(lambda: os.path.lexists(oya) and (os.unlink(oya) if os.path.islink(oya) else os.rmdir(oya)))
         ok, why = self.mon().shounin("tameshi")
         self.assertFalse(ok)
         self.assertIn("symlink", why)
