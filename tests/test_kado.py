@@ -2199,6 +2199,28 @@ class 独立監査の残り(Oki):
             with self.subTest(url=url):
                 self.assertFalse(h(url, d))
 
+    def test_POSTの宛先はactionと同じ_URL範囲の中の別の宛先でも止める(self):
+        """URL範囲が道すじ（/resource/）のとき、範囲の中でも action と違う宛先の POST は、メソッドの段で止まる。"""
+        han = "https://%s/resource/" % HOST
+        self.cards["tameshi-f"] = form_card(承認する取得方法=dict(form_card()["承認する取得方法"], URL範囲=[han]))
+        self.kaku_all()
+        self.shounin("tameshi-f")
+        hoka = han + "?id=99999"
+        self.assertTrue(kado.han_ni_hairu(hoka, han))                                    # 範囲の中
+        req = urllib.request.Request(hoka, data=kado.form_nakami(form_card()["公開form"]), method="POST")
+        with self.assertRaises(kado.Tomeru) as cm:
+            self.dasu(self.mon({"https://%s/robots.txt" % HOST: ROBOTS_OK, hoka: XLSX}), "tameshi-f", req)
+        self.assertIn("POST の宛先がカードの action と違う", str(cm.exception))
+        self.assertEqual(self.nise.kita, [])
+
+    def test_POSTのRefererは禁じる見出しとして止める(self):
+        self.shounin("tameshi-f")
+        req = urllib.request.Request(ACTION, data=kado.form_nakami(form_card()["公開form"]), method="POST",
+                                     headers={"Referer": ACTION})
+        with self.assertRaises(kado.Tomeru) as cm:
+            self.dasu(self.mon({"https://%s/robots.txt" % HOST: ROBOTS_OK, ACTION: XLSX}), "tameshi-f", req)
+        self.assertIn("POST に Referer の見出しを付けない", str(cm.exception))          # 許す一覧より前の、禁じる一覧の理由
+
     def test_公開formのactionも前方一致にしない(self):
         f = form_card()
         f["公開form"] = dict(f["公開form"], action=ACTION + "0")                         # URL範囲は ?id=21424 の1本
